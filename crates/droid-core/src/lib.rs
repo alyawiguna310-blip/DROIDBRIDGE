@@ -165,4 +165,15 @@ mod tests {
             Err(ConfigError::UnsupportedSchema(999))
         );
     }
+    #[test]
+    fn loads_poco_f6_profile_json() {
+        let json = include_str!("../../../profiles/POCO_F6.json");
+        let profile: DeviceProfile =
+            serde_json::from_str(json).expect("load POCO F6 profile");
+
+        assert_eq!(profile.profile_name, "POCO F6");
+        assert_eq!(profile.manufacturer, "Xiaomi");
+        assert_eq!(profile.model, "POCO F6");
+        assert_eq!(profile.reported_abi, vec!["arm64-v8a"]);
+    }
 }
