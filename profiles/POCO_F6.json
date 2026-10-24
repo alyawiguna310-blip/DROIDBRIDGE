@@ -1,0 +1,14 @@
+{
+  "profile_name": "POCO F6",
+  "manufacturer": "Xiaomi",
+  "model": "POCO F6",
+  "android_release": null,
+  "reported_abi": ["arm64-v8a"],
+  "display_width_px": null,
+  "display_height_px": null,
+  "display_density_dpi": null,
+  "properties": {
+    "profile_kind": "example",
+    "note": "Identity template only; not a verified full-device emulation."
+  }
+}
