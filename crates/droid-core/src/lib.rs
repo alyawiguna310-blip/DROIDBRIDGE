@@ -50,6 +50,81 @@ pub struct DeviceProfile {
     pub properties: BTreeMap<String, String>,
 }
 
+impl DeviceProfile {
+    /// Validate identity and display metadata without making claims about
+    /// host RAM, storage, CPU, or GPU capabilities.
+    pub fn validate(&self) -> Result<(), ProfileError> {
+        for (field, value) in [
+            ("profile_name", self.profile_name.as_str()),
+            ("manufacturer", self.manufacturer.as_str()),
+            ("model", self.model.as_str()),
+        ] {
+            if value.trim().is_empty() {
+                return Err(ProfileError::EmptyField(field));
+            }
+        }
+
+        if self
+            .android_release
+            .as_ref()
+            .is_some_and(|v| v.trim().is_empty())
+        {
+            return Err(ProfileError::EmptyField("android_release"));
+        }
+
+        if self.reported_abi.is_empty() {
+            return Err(ProfileError::EmptyAbiList);
+        }
+        if self.reported_abi.iter().any(|abi| abi.trim().is_empty()) {
+            return Err(ProfileError::EmptyAbiEntry);
+        }
+
+        for (field, value) in [
+            ("display_width_px", self.display_width_px),
+            ("display_height_px", self.display_height_px),
+            ("display_density_dpi", self.display_density_dpi),
+        ] {
+            if value == Some(0) {
+                return Err(ProfileError::ZeroDisplayValue(field));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn from_json(input: &str) -> Result<Self, ProfileError> {
+        let profile: Self =
+            serde_json::from_str(input).map_err(|e| ProfileError::InvalidJson(e.to_string()))?;
+        profile.validate()?;
+        Ok(profile)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProfileError {
+    InvalidJson(String),
+    EmptyField(&'static str),
+    EmptyAbiList,
+    EmptyAbiEntry,
+    ZeroDisplayValue(&'static str),
+}
+
+impl std::fmt::Display for ProfileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidJson(message) => write!(f, "invalid device profile: {message}"),
+            Self::EmptyField(field) => write!(f, "device profile field cannot be empty: {field}"),
+            Self::EmptyAbiList => write!(f, "device profile must report at least one ABI"),
+            Self::EmptyAbiEntry => write!(f, "device profile ABI entries cannot be empty"),
+            Self::ZeroDisplayValue(field) => {
+                write!(f, "device profile field must be nonzero: {field}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ProfileError {}
+
 /// Settings safe to copy between computers. Host-specific paths and detected
 /// hardware intentionally do not belong in this structure.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,8 +177,7 @@ impl BridgeConfig {
 
     pub fn to_pretty_json(&self) -> Result<String, ConfigError> {
         self.validate()?;
-        serde_json::to_string_pretty(self)
-            .map_err(|e| ConfigError::InvalidJson(e.to_string()))
+        serde_json::to_string_pretty(self).map_err(|e| ConfigError::InvalidJson(e.to_string()))
     }
 }
 
@@ -160,16 +234,82 @@ mod tests {
     fn rejects_unknown_schema_version() {
         let mut config = BridgeConfig::default();
         config.schema_version = 999;
+        assert_eq!(config.validate(), Err(ConfigError::UnsupportedSchema(999)));
+    }
+    #[test]
+    fn rejects_blank_profile_manufacturer() {
+        let mut profile: DeviceProfile =
+            serde_json::from_str(include_str!("../../../profiles/POCO_F6.json"))
+                .expect("parse example profile");
+        profile.manufacturer = "  ".to_owned();
         assert_eq!(
-            config.validate(),
-            Err(ConfigError::UnsupportedSchema(999))
+            profile.validate(),
+            Err(ProfileError::EmptyField("manufacturer"))
         );
     }
+
+    #[test]
+    fn rejects_empty_abi_list() {
+        let mut profile: DeviceProfile =
+            serde_json::from_str(include_str!("../../../profiles/POCO_F6.json"))
+                .expect("parse example profile");
+        profile.reported_abi.clear();
+        assert_eq!(profile.validate(), Err(ProfileError::EmptyAbiList));
+    }
+
+    #[test]
+    fn rejects_zero_display_width() {
+        let mut profile: DeviceProfile =
+            serde_json::from_str(include_str!("../../../profiles/POCO_F6.json"))
+                .expect("parse example profile");
+        profile.display_width_px = Some(0);
+        assert_eq!(
+            profile.validate(),
+            Err(ProfileError::ZeroDisplayValue("display_width_px"))
+        );
+    }
+
+    #[test]
+    fn rejects_blank_profile_name() {
+        let mut profile = DeviceProfile::from_json(include_str!("../../../profiles/POCO_F6.json"))
+            .expect("load example profile");
+        profile.profile_name = " ".to_owned();
+        assert_eq!(
+            profile.validate(),
+            Err(ProfileError::EmptyField("profile_name"))
+        );
+    }
+
+    #[test]
+    fn rejects_blank_abi_entry() {
+        let mut profile = DeviceProfile::from_json(include_str!("../../../profiles/POCO_F6.json"))
+            .expect("load example profile");
+        profile.reported_abi = vec!["arm64-v8a".to_owned(), " ".to_owned()];
+        assert_eq!(profile.validate(), Err(ProfileError::EmptyAbiEntry));
+    }
+
+    #[test]
+    fn rejects_zero_display_height_and_density() {
+        let mut profile = DeviceProfile::from_json(include_str!("../../../profiles/POCO_F6.json"))
+            .expect("load example profile");
+        profile.display_height_px = Some(0);
+        assert_eq!(
+            profile.validate(),
+            Err(ProfileError::ZeroDisplayValue("display_height_px"))
+        );
+
+        profile.display_height_px = None;
+        profile.display_density_dpi = Some(0);
+        assert_eq!(
+            profile.validate(),
+            Err(ProfileError::ZeroDisplayValue("display_density_dpi"))
+        );
+    }
+
     #[test]
     fn loads_poco_f6_profile_json() {
         let json = include_str!("../../../profiles/POCO_F6.json");
-        let profile: DeviceProfile =
-            serde_json::from_str(json).expect("load POCO F6 profile");
+        let profile = DeviceProfile::from_json(json).expect("load POCO F6 profile");
 
         assert_eq!(profile.profile_name, "POCO F6");
         assert_eq!(profile.manufacturer, "Xiaomi");
