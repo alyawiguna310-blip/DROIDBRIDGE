@@ -168,8 +168,8 @@ impl DeviceProfile {
     }
 
     fn from_value(value: Value) -> Result<Self, ProfileError> {
-        let profile: Self = serde_json::from_value(value)
-            .map_err(|e| ProfileError::InvalidJson(e.to_string()))?;
+        let profile: Self =
+            serde_json::from_value(value).map_err(|e| ProfileError::InvalidJson(e.to_string()))?;
         profile.validate()?;
         Ok(profile)
     }

@@ -234,7 +234,9 @@ mod tests {
 
         assert!(matches!(
             registry.register(sample("bad id")),
-            Err(RegistryError::InvalidProfile(ProfileError::InvalidId { .. }))
+            Err(RegistryError::InvalidProfile(
+                ProfileError::InvalidId { .. }
+            ))
         ));
         assert!(registry.is_empty());
     }
@@ -246,9 +248,15 @@ mod tests {
             registry.register(sample(id)).expect("register");
         }
 
-        assert_eq!(registry.ids().collect::<Vec<_>>(), vec!["Alpha", "beta", "zeta"]);
         assert_eq!(
-            registry.profiles().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+            registry.ids().collect::<Vec<_>>(),
+            vec!["Alpha", "beta", "zeta"]
+        );
+        assert_eq!(
+            registry
+                .profiles()
+                .map(|p| p.id.as_str())
+                .collect::<Vec<_>>(),
             vec!["Alpha", "beta", "zeta"]
         );
     }
@@ -406,7 +414,9 @@ mod tests {
         config.schema_version = 5;
         assert_eq!(
             registry.apply_config(&config),
-            Err(RegistryError::InvalidConfig(ConfigError::UnsupportedSchema(5)))
+            Err(RegistryError::InvalidConfig(
+                ConfigError::UnsupportedSchema(5)
+            ))
         );
 
         let mut config = BridgeConfig::default();
