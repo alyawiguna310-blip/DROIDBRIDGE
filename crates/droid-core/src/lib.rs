@@ -9,8 +9,10 @@
 //! - [`profile`]: [`DeviceProfile`] schema (with a stable `id`) and validation.
 //! - [`registry`]: [`ProfileRegistry`] for loading, looking up, and selecting profiles.
 //! - [`errors`]: typed errors for all of the above.
+//! - [`dex`]: bounds-checked parser for DEX files (untrusted input).
 
 pub mod config;
+pub mod dex;
 pub mod errors;
 pub mod profile;
 pub mod registry;
