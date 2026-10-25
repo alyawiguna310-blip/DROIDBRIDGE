@@ -1065,10 +1065,12 @@ mod tests {
                 code_off: 0
             }]
         );
+        // Same bytes, but the file declares no methods: index 0 is out of range.
         assert!(matches!(
             read_class_data(&bytes, 0, 0, 0),
-            Err(DexError::Malformed(_))
+            Err(DexError::IndexOutOfRange { kind: "method", .. })
         ));
+        // Delta of 5 lands on method 5, but only one method exists.
         assert!(matches!(
             read_class_data(&[0, 0, 1, 0, 5, 1, 0], 0, 0, 1),
             Err(DexError::IndexOutOfRange { kind: "method", .. })
