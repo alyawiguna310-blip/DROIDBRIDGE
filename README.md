@@ -7,7 +7,7 @@
 
 The shared core is intended to manage APK metadata, portable device profiles, runtime backends, and performance settings. The long-term goal is to run Android apps and games in host-integrated windows while using the host machine's actual CPU and GPU.
 
-> **Status: early scaffold.** This repository does not yet run Android APKs. Android framework compatibility, ART, graphics, ARM translation, and Google Play support are separate engineering milestones, not completed features.
+> **Status: early scaffold.** This repository does not yet run Android APKs. It can inspect them (archive, manifest, DEX headers) without executing anything. Android framework compatibility, ART, graphics, ARM translation, and Google Play support are separate engineering milestones, not completed features.
 
 ## Initial configuration
 
@@ -26,6 +26,8 @@ Device identity profiles must not claim unsupported CPU instructions or GPU capa
   - `profile` — `DeviceProfile` schema and validation.
   - `registry` — `ProfileRegistry` for loading, lookup, and active-profile selection.
   - `errors` — typed errors (`ProfileError`, `ConfigError`, `RegistryError`, `ProfileIdError`).
+  - `dex` — bounds-checked DEX parser (no execution).
+  - `apk` — APK inspection: ZIP reader with limits, Android binary manifest parser, DEX discovery.
 - `profiles/POCO_F6.json` — example portable profile.
 - `docs/architecture.md` — staged architecture and implementation plan.
 
@@ -55,6 +57,29 @@ Profile JSON written before the `id` field existed is **rejected** by `DevicePro
 
 The `BridgeConfig` schema version is unchanged (`1`); `active_profile` already held a string and now must be a valid profile id.
 
+## Inspecting an APK
+
+```rust
+use droid_core::apk::{inspect_file, ApkLimits};
+
+let report = inspect_file("app.apk", &ApkLimits::default())?;
+println!("package: {}", report.manifest.package);
+for dex in &report.dex_files {
+    println!("{}: parsed ok = {}", dex.entry_name, dex.outcome.is_ok());
+}
+# Ok::<(), droid_core::apk::ApkError>(())
+```
+
+The report contains the manifest metadata (package, version, SDK levels, permissions, application label, activity/service/receiver names), a per-entry result for every `classes*.dex`, the native libraries found under `lib/<abi>/`, and warnings such as `NoDexFiles`.
+
+- Inspection never executes, installs, extracts or loads anything from the APK.
+- The manifest must be Android binary XML. Plain-text and App Bundle manifests are rejected.
+- Resource references (for example `@string/app_name`) are reported as unresolved: `resources.arsc` is not read.
+- Archives with unsafe or duplicate entry names, too many entries, or oversized entries are rejected; limits are configurable through `ApkLimits`.
+- A malformed DEX file is reported against its entry and does not fail the whole inspection. A parsed DEX file does not mean the app can run.
+
+See `docs/architecture.md` for the full list of supported fields and known limitations.
+
 ## Development
 
 Install a current stable Rust toolchain (edition 2024 requires Rust 1.85 or newer), then run:
@@ -63,18 +88,22 @@ Install a current stable Rust toolchain (edition 2024 requires Rust 1.85 or newe
 cargo fmt --all -- --check
 cargo check --workspace
 cargo test --workspace
+cargo clippy --workspace --all-targets
 ```
+
+The first build downloads the `zip` crate, which updates `Cargo.lock`.
 
 ## Roadmap
 
-1. Validate portable configuration and host/device profile separation.
-2. Implement APK archive inspection and manifest metadata extraction.
-3. Define a replaceable runtime backend interface.
-4. Evaluate existing Android runtimes separately for Windows and Linux.
-5. Validate execution of a real APK, graphics, input, and lifecycle.
-6. Investigate ARM64 native-library translation where required.
-7. Evaluate legitimate Google Play support and its certification constraints.
-8. Benchmark RAM, CPU, GPU, startup time, and portability across machines.
+1. Validate portable configuration and host/device profile separation. (done)
+2. Implement APK archive inspection and manifest metadata extraction. (done, no execution)
+3. DEX instruction decoding and a minimal interpreter.
+4. Define a replaceable runtime backend interface.
+5. Evaluate existing Android runtimes separately for Windows and Linux.
+6. Validate execution of a real APK, graphics, input, and lifecycle.
+7. Investigate ARM64 native-library translation where required.
+8. Evaluate legitimate Google Play support and its certification constraints.
+9. Benchmark RAM, CPU, GPU, startup time, and portability across machines.
 
 ## Licensing
 
