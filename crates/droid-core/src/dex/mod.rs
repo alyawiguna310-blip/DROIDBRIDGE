@@ -22,7 +22,7 @@ mod error;
 mod file;
 mod reader;
 #[cfg(test)]
-mod testutil;
+pub(crate) mod testutil;
 
 pub use error::DexError;
 pub use file::{

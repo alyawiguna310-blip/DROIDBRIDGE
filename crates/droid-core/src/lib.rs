@@ -10,7 +10,9 @@
 //! - [`registry`]: [`ProfileRegistry`] for loading, looking up, and selecting profiles.
 //! - [`errors`]: typed errors for all of the above.
 //! - [`dex`]: bounds-checked parser for DEX files (untrusted input).
+//! - [`apk`]: APK inspection (archive, binary manifest, DEX discovery); never executes code.
 
+pub mod apk;
 pub mod config;
 pub mod dex;
 pub mod errors;
