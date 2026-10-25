@@ -211,7 +211,9 @@ impl<'a> DexFile<'a> {
         let _link_off = r.u32()?;
         let _map_off = r.u32()?;
         if link_size != 0 {
-            return Err(DexError::Unsupported("statically linked dex (link section)"));
+            return Err(DexError::Unsupported(
+                "statically linked dex (link section)",
+            ));
         }
 
         let header = DexHeader {
@@ -235,20 +237,56 @@ impl<'a> DexFile<'a> {
         };
 
         let len = data.len();
-        check_section(len, "string_ids", header.string_ids_off, header.string_ids_size, 4)?;
-        check_section(len, "type_ids", header.type_ids_off, header.type_ids_size, 4)?;
-        check_section(len, "proto_ids", header.proto_ids_off, header.proto_ids_size, 12)?;
-        check_section(len, "field_ids", header.field_ids_off, header.field_ids_size, 8)?;
-        check_section(len, "method_ids", header.method_ids_off, header.method_ids_size, 8)?;
-        check_section(len, "class_defs", header.class_defs_off, header.class_defs_size, 32)?;
+        check_section(
+            len,
+            "string_ids",
+            header.string_ids_off,
+            header.string_ids_size,
+            4,
+        )?;
+        check_section(
+            len,
+            "type_ids",
+            header.type_ids_off,
+            header.type_ids_size,
+            4,
+        )?;
+        check_section(
+            len,
+            "proto_ids",
+            header.proto_ids_off,
+            header.proto_ids_size,
+            12,
+        )?;
+        check_section(
+            len,
+            "field_ids",
+            header.field_ids_off,
+            header.field_ids_size,
+            8,
+        )?;
+        check_section(
+            len,
+            "method_ids",
+            header.method_ids_off,
+            header.method_ids_size,
+            8,
+        )?;
+        check_section(
+            len,
+            "class_defs",
+            header.class_defs_off,
+            header.class_defs_size,
+            32,
+        )?;
         check_section(len, "data", header.data_off, header.data_size, 1)?;
 
-        let string_offsets = read_table(data, header.string_ids_off, header.string_ids_size, |r| {
-            r.u32()
-        })?;
-        let type_descriptors = read_table(data, header.type_ids_off, header.type_ids_size, |r| {
-            r.u32()
-        })?;
+        let string_offsets =
+            read_table(data, header.string_ids_off, header.string_ids_size, |r| {
+                r.u32()
+            })?;
+        let type_descriptors =
+            read_table(data, header.type_ids_off, header.type_ids_size, |r| r.u32())?;
         let protos = read_table(data, header.proto_ids_off, header.proto_ids_size, |r| {
             Ok(ProtoId {
                 shorty_idx: r.u32()?,
@@ -374,29 +412,29 @@ impl<'a> DexFile<'a> {
     /// Decode string `idx` from its MUTF-8 data item. Unpaired surrogates are
     /// replaced with U+FFFD.
     pub fn string(&self, idx: u32) -> Result<String, DexError> {
-        let off = self
-            .string_offsets
-            .get(idx as usize)
-            .copied()
-            .ok_or(DexError::IndexOutOfRange {
-                kind: "string",
-                index: idx,
-                limit: limit_u32(self.string_offsets.len()),
-            })?;
+        let off =
+            self.string_offsets
+                .get(idx as usize)
+                .copied()
+                .ok_or(DexError::IndexOutOfRange {
+                    kind: "string",
+                    index: idx,
+                    limit: limit_u32(self.string_offsets.len()),
+                })?;
         read_string_data(self.data, off)
     }
 
     /// The descriptor (for example `Ljava/lang/Object;` or `I`) of type `idx`.
     pub fn type_descriptor(&self, idx: u32) -> Result<String, DexError> {
-        let string_idx = self
-            .type_descriptors
-            .get(idx as usize)
-            .copied()
-            .ok_or(DexError::IndexOutOfRange {
-                kind: "type",
-                index: idx,
-                limit: limit_u32(self.type_descriptors.len()),
-            })?;
+        let string_idx =
+            self.type_descriptors
+                .get(idx as usize)
+                .copied()
+                .ok_or(DexError::IndexOutOfRange {
+                    kind: "type",
+                    index: idx,
+                    limit: limit_u32(self.type_descriptors.len()),
+                })?;
         self.string(string_idx)
     }
 
@@ -434,14 +472,14 @@ impl<'a> DexFile<'a> {
                 index: method_idx,
                 limit: limit_u32(self.methods.len()),
             })?;
-        let proto = self
-            .protos
-            .get(usize::from(method.proto_idx))
-            .ok_or(DexError::IndexOutOfRange {
-                kind: "proto",
-                index: u32::from(method.proto_idx),
-                limit: limit_u32(self.protos.len()),
-            })?;
+        let proto =
+            self.protos
+                .get(usize::from(method.proto_idx))
+                .ok_or(DexError::IndexOutOfRange {
+                    kind: "proto",
+                    index: u32::from(method.proto_idx),
+                    limit: limit_u32(self.protos.len()),
+                })?;
         let parameter_types = self
             .proto_parameters(proto)?
             .into_iter()
@@ -473,12 +511,11 @@ impl<'a> DexFile<'a> {
     /// Parse the `code_item` at `code_off` (taken from an [`EncodedMethod`];
     /// `0` means the method has no code and must not be passed here).
     pub fn code_item(&self, code_off: u32) -> Result<CodeItem, DexError> {
-        let mut r = Reader::at(self.data, code_off as usize).map_err(|_| {
-            DexError::OffsetOutOfBounds {
+        let mut r =
+            Reader::at(self.data, code_off as usize).map_err(|_| DexError::OffsetOutOfBounds {
                 what: "code_item",
                 offset: code_off,
-            }
-        })?;
+            })?;
         let registers_size = r.u16()?;
         let ins_size = r.u16()?;
         let outs_size = r.u16()?;
@@ -1134,9 +1171,15 @@ mod tests {
 
     #[test]
     fn string_data_checks_length_terminator_and_encoding() {
-        assert_eq!(read_string_data(&[2, b'h', b'i', 0], 0), Ok("hi".to_owned()));
+        assert_eq!(
+            read_string_data(&[2, b'h', b'i', 0], 0),
+            Ok("hi".to_owned())
+        );
         let invalid = DexError::InvalidStringData { offset: 0 };
-        assert_eq!(read_string_data(&[3, b'h', b'i', 0], 0), Err(invalid.clone()));
+        assert_eq!(
+            read_string_data(&[3, b'h', b'i', 0], 0),
+            Err(invalid.clone())
+        );
         assert_eq!(read_string_data(&[2, b'h', b'i'], 0), Err(invalid.clone()));
         assert_eq!(read_string_data(&[1, 0xff, 0], 0), Err(invalid));
         assert_eq!(

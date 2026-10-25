@@ -49,17 +49,18 @@ impl fmt::Display for DexError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::FileTooLarge { size, max } => {
-                write!(f, "dex file is {size} bytes, larger than the {max} byte limit")
+                write!(
+                    f,
+                    "dex file is {size} bytes, larger than the {max} byte limit"
+                )
             }
             Self::UnexpectedEof { offset } => {
                 write!(f, "unexpected end of dex data at offset {offset:#x}")
             }
             Self::BadMagic => write!(f, "not a dex file: bad magic"),
-            Self::UnsupportedVersion(v) => write!(
-                f,
-                "unsupported dex version {}",
-                String::from_utf8_lossy(v)
-            ),
+            Self::UnsupportedVersion(v) => {
+                write!(f, "unsupported dex version {}", String::from_utf8_lossy(v))
+            }
             Self::BadHeaderSize(size) => write!(f, "unexpected dex header size {size:#x}"),
             Self::UnsupportedEndianTag(tag) => write!(f, "unsupported endian tag {tag:#010x}"),
             Self::FileSizeMismatch { declared, actual } => write!(
