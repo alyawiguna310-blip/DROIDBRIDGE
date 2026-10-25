@@ -170,7 +170,7 @@ impl<'a> DexFile<'a> {
 
         let mut r = Reader::new(data);
         let magic = r.bytes(8)?;
-        if &magic[0..4] != b"dex\n"
+        if magic[0..4] != *b"dex\n"
             || magic[7] != 0
             || !magic[4..7].iter().all(|b| b.is_ascii_digit())
         {
@@ -1067,6 +1067,10 @@ mod tests {
         );
         assert!(matches!(
             read_class_data(&bytes, 0, 0, 0),
+            Err(DexError::Malformed(_))
+        ));
+        assert!(matches!(
+            read_class_data(&[0, 0, 1, 0, 5, 1, 0], 0, 0, 1),
             Err(DexError::IndexOutOfRange { kind: "method", .. })
         ));
     }
@@ -1082,9 +1086,15 @@ mod tests {
 
     #[test]
     fn class_data_rejects_truncation_and_index_overflow() {
+        // One direct method declared, but the code_off field is cut off.
+        assert!(matches!(
+            read_class_data(&[0, 0, 1, 0, 0, 1], 0, 0, 1),
+            Err(DexError::UnexpectedEof { .. })
+        ));
+        // One direct method declared with no bytes left at all.
         assert!(matches!(
             read_class_data(&[0, 0, 1, 0], 0, 0, 1),
-            Err(DexError::UnexpectedEof { .. })
+            Err(DexError::Malformed(_))
         ));
         let overflow = [
             2, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, 0x0f, 0, 0xff, 0xff, 0xff, 0xff, 0x0f, 0,
