@@ -7,7 +7,7 @@
 
 The shared core is intended to manage APK metadata, portable device profiles, runtime backends, and performance settings. The long-term goal is to run Android apps and games in host-integrated windows while using the host machine's actual CPU and GPU.
 
-> **Status: early scaffold.** This repository still has not demonstrated launching a real Android APK. It can inspect APKs without executing them and now includes a first Linux Waydroid CLI adapter. The adapter is covered with a mocked-command test, but live Waydroid installation, graphics, and real-app execution have not yet been validated. Android framework compatibility, ART, ARM translation, and Google Play support remain separate milestones.
+> **Status: early scaffold.** This repository still has not demonstrated launching a real Android APK. It can inspect APKs without executing APK contents, evaluate a tightly limited integer-only DEX instruction subset, and includes a first Linux Waydroid CLI adapter. The adapter has mocked-command tests, but live Waydroid installation, graphics, and real-app execution have not yet been validated. The integer interpreter is not ART and cannot run Android apps by itself.
 
 ## Initial configuration
 
@@ -27,7 +27,7 @@ Device identity profiles must not claim unsupported CPU instructions or GPU capa
   - `registry` — `ProfileRegistry` for loading, lookup, and active-profile selection.
   - `errors` — typed errors (`ProfileError`, `ConfigError`, `RegistryError`, `ProfileIdError`).
   - `runtime` — runtime-backend trait and an initial Linux `WaydroidBackend` for readiness probing, APK installation/launch, process polling, and force-stop; integration with a live Waydroid installation is still unverified.
-  - `dex` — bounds-checked DEX parser (no execution).
+  - `dex` — bounds-checked DEX parser plus an experimental, step-limited integer-only instruction decoder/interpreter; not ART.
   - `apk` — APK inspection: ZIP reader with limits, Android binary manifest parser, DEX discovery.
 - `profiles/POCO_F6.json` — example portable profile.
 - `docs/architecture.md` — staged architecture and implementation plan.
@@ -81,6 +81,12 @@ The report contains the manifest metadata (package, version, SDK levels, permiss
 
 See `docs/architecture.md` for the full list of supported fields and known limitations.
 
+## Experimental integer-only DEX interpreter
+
+The DEX module can decode and evaluate a deliberately small set of 16-bit DEX code-unit instructions: move, const/4, const/16, const/32, 32-bit integer add/subtract/multiply/divide/remainder, return, goto, and integer comparison branches. Execution uses caller-supplied 32-bit input values, validates register and branch targets, rejects unsupported opcodes and try/catch code items, and has hard limits of 262,144 code units per method and 1,000,000 executed instructions.
+
+This is a testable core primitive, **not a general DEX virtual machine**. It does not support object references, wide values, method calls, fields, arrays, exception handling, native code, ART, or Android framework services. It cannot launch an APK; running an app still requires a compatible Android runtime.
+
 ## Runtime backend contract
 
 The `runtime` module is the seam between the portable core and a separately provisioned Android runtime. It defines backend identity, capability declarations, readiness probing, a validated launch request, and a session handle for observing/stopping a running app. Capabilities default to `Unknown` so a backend must not claim ARM64 execution or graphics support without verification.
@@ -104,7 +110,7 @@ The first build downloads the `zip` crate, which updates `Cargo.lock`.
 
 1. Validate portable configuration and host/device profile separation. (done)
 2. Implement APK archive inspection and manifest metadata extraction. (done, no execution)
-3. DEX instruction decoding and a minimal interpreter.
+3. DEX instruction decoding and a minimal interpreter. (partial: bounded integer-only opcode subset; not a general DEX VM)
 4. Define a replaceable runtime backend interface and backend capability report. (contract plus initial Waydroid CLI adapter implemented; live runtime not yet validated)
 5. Evaluate and integrate existing Android runtimes separately for Windows and Linux. (Waydroid CLI path implemented for Linux; real APK launch not yet validated)
 6. Validate execution of a real APK, graphics, input, and lifecycle.
