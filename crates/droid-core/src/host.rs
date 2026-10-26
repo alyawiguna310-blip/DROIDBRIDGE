@@ -1,11 +1,11 @@
 //! Read-only report of host capabilities visible to the current core process.
-
-use sysinfo::System;
 //!
 //! This module deliberately reports host/build facts separately from
 //! Android-facing [`crate::DeviceProfile`] identity. It does not spoof device
 //! properties or claim support for CPU instructions, GPU features, or graphics
 //! APIs that have not been detected.
+
+use sysinfo::System;
 
 /// Basic host information collected through portable Rust APIs and sysinfo.
 ///
