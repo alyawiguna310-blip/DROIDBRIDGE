@@ -9,6 +9,7 @@
 //! - [`profile`]: [`DeviceProfile`] schema (with a stable `id`) and validation.
 //! - [`registry`]: [`ProfileRegistry`] for loading, looking up, and selecting profiles.
 //! - [`errors`]: typed errors for all of the above.
+//! - [`runtime`]: contracts for pluggable Android runtime backends; no backend is implemented yet.
 //! - [`dex`]: bounds-checked parser for DEX files (untrusted input).
 //! - [`apk`]: APK inspection (archive, binary manifest, DEX discovery); never executes code.
 
@@ -18,8 +19,13 @@ pub mod dex;
 pub mod errors;
 pub mod profile;
 pub mod registry;
+pub mod runtime;
 
 pub use config::{BridgeConfig, GoogleServicesMode, PerformancePreset};
 pub use errors::{ConfigError, ProfileError, ProfileIdError, RegistryError};
 pub use profile::{DeviceProfile, MAX_PROFILE_ID_LEN, validate_profile_id};
 pub use registry::ProfileRegistry;
+pub use runtime::{
+    BackendStatus, CapabilitySupport, LaunchRequest, RuntimeBackend, RuntimeBackendInfo,
+    RuntimeCapabilities, RuntimeError, RuntimeOperation, RuntimeSession, RuntimeSessionState,
+};
