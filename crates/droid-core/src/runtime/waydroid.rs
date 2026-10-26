@@ -112,26 +112,23 @@ impl RuntimeBackend for WaydroidBackend {
         if !output.status.success() {
             return Ok(BackendStatus::Unavailable {
                 reason: if details.is_empty() {
-                    format!(
-                        "Waydroid status exited with {}",
-                        output.status
-                    )
+                    format!("Waydroid status exited with {}", output.status)
                 } else {
                     details
                 },
             });
         }
 
-        Ok(parse_status_output(&details).unwrap_or_else(|| BackendStatus::Unavailable {
-            reason: "could not determine Waydroid session/container status from its status command"
-                .to_owned(),
-        }))
+        Ok(
+            parse_status_output(&details).unwrap_or_else(|| BackendStatus::Unavailable {
+                reason:
+                    "could not determine Waydroid session/container status from its status command"
+                        .to_owned(),
+            }),
+        )
     }
 
-    fn launch(
-        &self,
-        request: &LaunchRequest,
-    ) -> Result<Box<dyn RuntimeSession>, RuntimeError> {
+    fn launch(&self, request: &LaunchRequest) -> Result<Box<dyn RuntimeSession>, RuntimeError> {
         if !valid_package_name(request.package_name()) {
             return Err(RuntimeError::InvalidLaunchRequest {
                 field: "package_name",
@@ -163,7 +160,8 @@ impl RuntimeBackend for WaydroidBackend {
             BackendStatus::NotInstalled => {
                 return Err(RuntimeError::BackendUnavailable {
                     backend_id: self.info.id.clone(),
-                    reason: "Waydroid was not found; install and initialize it separately".to_owned(),
+                    reason: "Waydroid was not found; install and initialize it separately"
+                        .to_owned(),
                 });
             }
             BackendStatus::NotRunning => {
@@ -337,7 +335,9 @@ impl RuntimeSession for WaydroidSession {
             .args(["shell", "pidof", "-s"])
             .arg(&self.package_name)
             .output()
-            .map_err(|error| self.command_error(RuntimeOperation::PollSession, error.to_string()))?;
+            .map_err(|error| {
+                self.command_error(RuntimeOperation::PollSession, error.to_string())
+            })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -379,13 +379,12 @@ impl RuntimeSession for WaydroidSession {
         let output = Command::new(&self.executable)
             .args(args)
             .output()
-            .map_err(|error| self.command_error(RuntimeOperation::StopSession, error.to_string()))?;
+            .map_err(|error| {
+                self.command_error(RuntimeOperation::StopSession, error.to_string())
+            })?;
 
         if !output.status.success() {
-            return Err(self.command_error(
-                RuntimeOperation::StopSession,
-                output_message(&output),
-            ));
+            return Err(self.command_error(RuntimeOperation::StopSession, output_message(&output)));
         }
 
         self.stopped = true;
@@ -461,9 +460,7 @@ mod tests {
         let log = root.join("calls.log");
         let stopped = root.join("stopped.flag");
         fs::write(&apk, b"fixture only; not a real APK").expect("write fixture");
-        let quote = |path: &Path| {
-            format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
-        };
+        let quote = |path: &Path| format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"));
         let script = format!(
             r#"#!/bin/sh
 printf '%s\n' "$*" >> {log}
@@ -496,13 +493,21 @@ exit 2
         fs::set_permissions(&executable, permissions).expect("make fake executable runnable");
 
         let backend = WaydroidBackend::new(&executable);
-        assert_eq!(backend.probe().expect("probe fake backend"), BackendStatus::Ready);
-        let request = LaunchRequest::new(&apk, "com.example.game", "POCO_F6")
-            .expect("valid launch request");
-        let mut session = backend.launch(&request).expect("launch through fake backend");
+        assert_eq!(
+            backend.probe().expect("probe fake backend"),
+            BackendStatus::Ready
+        );
+        let request =
+            LaunchRequest::new(&apk, "com.example.game", "POCO_F6").expect("valid launch request");
+        let mut session = backend
+            .launch(&request)
+            .expect("launch through fake backend");
 
         assert_eq!(session.package_name(), "com.example.game");
-        assert_eq!(session.state().expect("poll process"), RuntimeSessionState::Running);
+        assert_eq!(
+            session.state().expect("poll process"),
+            RuntimeSessionState::Running
+        );
         session.stop().expect("stop fake session");
         assert_eq!(
             session.state().expect("poll stopped process"),
