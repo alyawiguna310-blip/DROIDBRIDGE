@@ -7,7 +7,7 @@
 
 The shared core is intended to manage APK metadata, portable device profiles, runtime backends, and performance settings. The long-term goal is to run Android apps and games in host-integrated windows while using the host machine's actual CPU and GPU.
 
-> **Status: early scaffold.** This repository does not yet run Android APKs. It can inspect them (archive, manifest, DEX headers) without executing anything. Android framework compatibility, ART, graphics, ARM translation, and Google Play support are separate engineering milestones, not completed features.
+> **Status: early scaffold.** This repository does not yet run Android APKs. It can inspect them (archive, manifest, DEX headers) without executing anything. It now defines a runtime-backend interface, but no concrete adapter is implemented. Android framework compatibility, ART, graphics, ARM translation, and Google Play support are separate engineering milestones, not completed features.
 
 ## Initial configuration
 
@@ -26,6 +26,7 @@ Device identity profiles must not claim unsupported CPU instructions or GPU capa
   - `profile` — `DeviceProfile` schema and validation.
   - `registry` — `ProfileRegistry` for loading, lookup, and active-profile selection.
   - `errors` — typed errors (`ProfileError`, `ConfigError`, `RegistryError`, `ProfileIdError`).
+  - `runtime` — runtime-backend trait, capability reporting, validated launch requests, and session lifecycle contract; no concrete runtime adapter yet.
   - `dex` — bounds-checked DEX parser (no execution).
   - `apk` — APK inspection: ZIP reader with limits, Android binary manifest parser, DEX discovery.
 - `profiles/POCO_F6.json` — example portable profile.
@@ -80,6 +81,12 @@ The report contains the manifest metadata (package, version, SDK levels, permiss
 
 See `docs/architecture.md` for the full list of supported fields and known limitations.
 
+## Runtime backend contract
+
+The `runtime` module is the seam between the portable core and a separately provisioned Android runtime. It defines backend identity, capability declarations, readiness probing, a validated launch request, and a session handle for observing/stopping a running app. Capabilities default to `Unknown` so a backend must not claim ARM64 execution or graphics support without verification.
+
+This contract is not an emulator. There is no concrete runtime adapter yet, and a launch request does not by itself validate APK safety or compatibility. The next implementation step is to evaluate a supported runtime and build an adapter that implements this contract.
+
 ## Development
 
 Install a current stable Rust toolchain (edition 2024 requires Rust 1.85 or newer), then run:
@@ -98,7 +105,7 @@ The first build downloads the `zip` crate, which updates `Cargo.lock`.
 1. Validate portable configuration and host/device profile separation. (done)
 2. Implement APK archive inspection and manifest metadata extraction. (done, no execution)
 3. DEX instruction decoding and a minimal interpreter.
-4. Define a replaceable runtime backend interface.
+4. Define a replaceable runtime backend interface. (contract defined; no concrete adapter)
 5. Evaluate existing Android runtimes separately for Windows and Linux.
 6. Validate execution of a real APK, graphics, input, and lifecycle.
 7. Investigate ARM64 native-library translation where required.
