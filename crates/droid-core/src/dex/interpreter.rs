@@ -7,6 +7,11 @@
 use super::file::CodeItem;
 use std::fmt;
 
+/// Hard upper bound for the number of 16-bit code units in one interpreted method.
+pub const MAX_INTERPRETED_CODE_UNITS: usize = 262_144;
+/// Hard ceiling on executed instructions, even if a caller requests a larger limit.
+pub const MAX_INTERPRETER_STEPS: usize = 1_000_000;
+
 /// Integer arithmetic operations supported by the minimal interpreter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntegerBinaryOp {
@@ -97,6 +102,10 @@ pub enum DexExecutionError {
         expected: usize,
         actual: usize,
     },
+    CodeTooLarge {
+        code_units: usize,
+        max_code_units: usize,
+    },
     InvalidCodeItem(&'static str),
     UnsupportedTryCatch,
     InvalidBranchTarget {
@@ -133,6 +142,10 @@ impl fmt::Display for DexExecutionError {
             Self::ArgumentCountMismatch { expected, actual } => {
                 write!(f, "method expects {expected} input registers but received {actual} values")
             }
+            Self::CodeTooLarge { code_units, max_code_units } => write!(
+                f,
+                "method has {code_units} code units, exceeding the interpreter limit of {max_code_units}"
+            ),
             Self::InvalidCodeItem(reason) => write!(f, "invalid code item for integer execution: {reason}"),
             Self::UnsupportedTryCatch => {
                 write!(f, "integer interpreter refuses code items with try/catch tables")
@@ -419,7 +432,9 @@ fn decode_program(insns: &[u16]) -> Result<Vec<Option<DecodedInstruction>>, DexE
 /// flow are supported. Object references, wide values, invokes, fields, arrays,
 /// native calls, exception handlers, and Android framework services are out of
 /// scope. The caller supplies the maximum executed-instruction count to guard
-/// against infinite loops. A zero limit executes no instructions.
+/// against infinite loops. The request is capped at MAX_INTERPRETER_STEPS, and
+/// methods above MAX_INTERPRETED_CODE_UNITS are rejected. A zero limit executes
+/// no instructions.
 pub fn execute_integer_method(
     code: &CodeItem,
     arguments: &[i32],
@@ -427,6 +442,12 @@ pub fn execute_integer_method(
 ) -> Result<Option<i32>, DexExecutionError> {
     if code.tries_size != 0 {
         return Err(DexExecutionError::UnsupportedTryCatch);
+    }
+    if code.insns.len() > MAX_INTERPRETED_CODE_UNITS {
+        return Err(DexExecutionError::CodeTooLarge {
+            code_units: code.insns.len(),
+            max_code_units: MAX_INTERPRETED_CODE_UNITS,
+        });
     }
     if code.ins_size > code.registers_size {
         return Err(DexExecutionError::InvalidCodeItem(
@@ -444,6 +465,7 @@ pub fn execute_integer_method(
     }
 
     let program = decode_program(&code.insns)?;
+    let max_steps = max_steps.min(MAX_INTERPRETER_STEPS);
     let mut registers = vec![0i32; usize::from(code.registers_size)];
     let input_start = registers.len() - arguments.len();
     registers[input_start..].copy_from_slice(arguments);
@@ -731,6 +753,22 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn rejects_code_items_above_the_hard_size_limit() {
+        let method = code(
+            0,
+            0,
+            &vec![0x000e; MAX_INTERPRETED_CODE_UNITS + 1],
+        );
+        assert_eq!(
+            execute_integer_method(&method, &[], 10),
+            Err(DexExecutionError::CodeTooLarge {
+                code_units: MAX_INTERPRETED_CODE_UNITS + 1,
+                max_code_units: MAX_INTERPRETED_CODE_UNITS,
+            })
+        );
     }
 
     #[test]
