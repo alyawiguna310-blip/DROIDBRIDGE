@@ -7,6 +7,8 @@ use crate::profile::validate_profile_id;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+pub mod waydroid;
+
 /// Whether a backend capability has been verified for the current host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CapabilitySupport {
