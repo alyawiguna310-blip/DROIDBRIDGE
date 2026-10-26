@@ -30,7 +30,7 @@ The scaffold does not emulate a CPU, execute DEX, implement ART, render Android 
 - `profile` — `DeviceProfile` and profile-id validation.
 - `registry` — `ProfileRegistry`: in-memory store of validated profiles keyed by id, with an explicit active-profile selection.
 - `errors` — typed errors so callers match on variants instead of parsing strings.
-- `host` — read-only `HostCapabilities::detect()` report for build-target OS/architecture and the logical CPU count available to the current process. It does not yet probe RAM, GPU, SIMD, or graphics APIs.
+- `host` — read-only `HostCapabilities::detect()` report for build-target OS/architecture, the logical CPU count available to the current process, and total/available system memory in bytes. It does not yet probe GPU, SIMD, or graphics APIs.
 - `dex` — bounds-checked DEX parser (header, id tables, class data, code items). Parsing only; see "DEX parsing" below.
 - `apk` — APK inspection (archive, binary manifest, DEX discovery, native library names). Inspection only; see "APK inspection" below.
 
@@ -65,7 +65,7 @@ Residual risk: the ZIP library parses the whole central directory in memory. The
 
 ## Hardware identity and host capabilities
 
-Keep Android-facing profile properties separate from actual host CPU, GPU, RAM, instruction-set support, and graphics capabilities. The initial `HostCapabilities` API reports target OS/architecture and the logical CPU count available to the process; it does not currently detect RAM, GPU, SIMD, or graphics API support. A profile can request supported identity properties, but it must not make the runtime claim that the host supports instructions or graphics features it cannot execute. Some apps may independently detect the host/runtime mismatch.
+Keep Android-facing profile properties separate from actual host CPU, GPU, RAM, instruction-set support, and graphics capabilities. The initial `HostCapabilities` API reports target OS/architecture, logical CPUs available to the process, and system-reported total/available memory. It does not currently detect GPU, SIMD, or graphics API support. A profile can request supported identity properties, but it must not make the runtime claim that the host supports instructions or graphics features it cannot execute. Some apps may independently detect the host/runtime mismatch.
 
 ## Portability
 
