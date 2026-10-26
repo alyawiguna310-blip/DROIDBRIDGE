@@ -25,8 +25,8 @@ pub use config::{BridgeConfig, GoogleServicesMode, PerformancePreset};
 pub use errors::{ConfigError, ProfileError, ProfileIdError, RegistryError};
 pub use profile::{DeviceProfile, MAX_PROFILE_ID_LEN, validate_profile_id};
 pub use registry::ProfileRegistry;
+pub use runtime::waydroid::WaydroidBackend;
 pub use runtime::{
     BackendStatus, CapabilitySupport, LaunchRequest, RuntimeBackend, RuntimeBackendInfo,
     RuntimeCapabilities, RuntimeError, RuntimeOperation, RuntimeSession, RuntimeSessionState,
 };
-pub use runtime::waydroid::WaydroidBackend;
