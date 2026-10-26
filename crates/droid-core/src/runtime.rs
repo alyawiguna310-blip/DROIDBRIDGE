@@ -47,6 +47,8 @@ pub enum BackendStatus {
     Ready,
     /// The runtime is not installed or could not be found.
     NotInstalled,
+    /// The runtime is installed, but its session/container is not running.
+    NotRunning,
     /// The current host cannot use this backend.
     UnsupportedHost,
     /// The runtime exists but needs user configuration before launch.
@@ -178,6 +180,8 @@ impl std::error::Error for RuntimeError {}
 /// Observable state of a launched application session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeSessionState {
+    /// The launch command was accepted, but the app process has not appeared yet.
+    Starting,
     Running,
     Exited { exit_code: Option<i32> },
     Failed { reason: String },
