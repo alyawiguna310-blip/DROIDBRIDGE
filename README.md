@@ -26,6 +26,7 @@ Device identity profiles must not claim unsupported CPU instructions or GPU capa
   - `profile` — `DeviceProfile` schema and validation.
   - `registry` — `ProfileRegistry` for loading, lookup, and active-profile selection.
   - `errors` — typed errors (`ProfileError`, `ConfigError`, `RegistryError`, `ProfileIdError`).
+  - `host` — read-only host report for OS target, architecture target, available logical CPU count, and system-reported total/available RAM.
   - `dex` — bounds-checked DEX parser (no execution).
   - `apk` — APK inspection: ZIP reader with limits, Android binary manifest parser, DEX discovery.
 - `profiles/POCO_F6.json` — example portable profile.
