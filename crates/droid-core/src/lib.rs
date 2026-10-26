@@ -16,10 +16,12 @@ pub mod apk;
 pub mod config;
 pub mod dex;
 pub mod errors;
+pub mod host;
 pub mod profile;
 pub mod registry;
 
 pub use config::{BridgeConfig, GoogleServicesMode, PerformancePreset};
 pub use errors::{ConfigError, ProfileError, ProfileIdError, RegistryError};
+pub use host::HostCapabilities;
 pub use profile::{DeviceProfile, MAX_PROFILE_ID_LEN, validate_profile_id};
 pub use registry::ProfileRegistry;
