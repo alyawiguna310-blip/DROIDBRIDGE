@@ -89,11 +89,9 @@ impl LaunchRequest {
                 reason: "package name cannot be empty".to_owned(),
             });
         }
-        validate_profile_id(&profile_id).map_err(|problem| {
-            RuntimeError::InvalidLaunchRequest {
-                field: "profile_id",
-                reason: problem.to_string(),
-            }
+        validate_profile_id(&profile_id).map_err(|problem| RuntimeError::InvalidLaunchRequest {
+            field: "profile_id",
+            reason: problem.to_string(),
         })?;
 
         Ok(Self {
@@ -214,10 +212,7 @@ pub trait RuntimeBackend: Send + Sync {
 
     /// Install the APK if necessary and launch the requested package, or return
     /// a typed error. APK inspection and policy checks remain the caller's job.
-    fn launch(
-        &self,
-        request: &LaunchRequest,
-    ) -> Result<Box<dyn RuntimeSession>, RuntimeError>;
+    fn launch(&self, request: &LaunchRequest) -> Result<Box<dyn RuntimeSession>, RuntimeError>;
 }
 
 #[cfg(test)]
