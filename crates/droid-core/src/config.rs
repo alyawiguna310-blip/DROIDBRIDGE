@@ -116,15 +116,19 @@ mod tests {
 
     #[test]
     fn rejects_empty_active_profile() {
-        let mut config = BridgeConfig::default();
-        config.active_profile = "  ".to_owned();
+        let config = BridgeConfig {
+            active_profile: "  ".to_owned(),
+            ..BridgeConfig::default()
+        };
         assert_eq!(config.validate(), Err(ConfigError::EmptyProfileName));
     }
 
     #[test]
     fn rejects_unknown_schema_version() {
-        let mut config = BridgeConfig::default();
-        config.schema_version = 999;
+        let config = BridgeConfig {
+            schema_version: 999,
+            ..BridgeConfig::default()
+        };
         assert_eq!(config.validate(), Err(ConfigError::UnsupportedSchema(999)));
     }
 
@@ -140,8 +144,10 @@ mod tests {
 
     #[test]
     fn rejects_malformed_active_profile_id() {
-        let mut config = BridgeConfig::default();
-        config.active_profile = "POCO F6".to_owned();
+        let config = BridgeConfig {
+            active_profile: "POCO F6".to_owned(),
+            ..BridgeConfig::default()
+        };
         assert_eq!(
             config.validate(),
             Err(ConfigError::InvalidActiveProfile {

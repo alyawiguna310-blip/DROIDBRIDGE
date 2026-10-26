@@ -67,7 +67,10 @@ pub enum AttrValue {
     Boolean(bool),
     Float(f32),
     /// Any other typed value, left uninterpreted.
-    Other { data_type: u8, data: u32 },
+    Other {
+        data_type: u8,
+        data: u32,
+    },
 }
 
 /// An element attribute.
@@ -218,15 +221,16 @@ impl<'a> StringPool<'a> {
     }
 
     fn get(&self, index: u32) -> Result<String, AxmlError> {
-        let offset = self
-            .offsets
-            .get(index as usize)
-            .copied()
-            .ok_or(AxmlError::StringIndexOutOfRange {
-                index,
-                count: self.offsets.len(),
-            })? as usize;
-        self.decode(offset).ok_or(AxmlError::InvalidString { index })
+        let offset =
+            self.offsets
+                .get(index as usize)
+                .copied()
+                .ok_or(AxmlError::StringIndexOutOfRange {
+                    index,
+                    count: self.offsets.len(),
+                })? as usize;
+        self.decode(offset)
+            .ok_or(AxmlError::InvalidString { index })
     }
 
     fn decode(&self, offset: usize) -> Option<String> {

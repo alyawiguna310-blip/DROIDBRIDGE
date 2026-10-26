@@ -157,7 +157,8 @@ pub fn inspect_reader<R: Read + Seek>(
             name: MANIFEST_ENTRY,
         });
     }
-    let manifest_bytes = archive.read_entry(MANIFEST_ENTRY, limits.max_manifest_size, &mut budget)?;
+    let manifest_bytes =
+        archive.read_entry(MANIFEST_ENTRY, limits.max_manifest_size, &mut budget)?;
     let manifest = parse_manifest(&manifest_bytes, &limits.axml)?;
 
     let mut native_libraries: Vec<NativeLibrary> = archive
@@ -356,19 +357,24 @@ mod tests {
     #[test]
     fn invalid_manifest_data_is_rejected() {
         let dex = sample_dex();
-        let text = stored(&[e(MANIFEST_ENTRY, b"<manifest package=x/>"), e("classes.dex", &dex)]);
+        let text = stored(&[
+            e(MANIFEST_ENTRY, b"<manifest package=x/>"),
+            e("classes.dex", &dex),
+        ]);
         assert!(matches!(
             inspect(&text),
-            Err(ApkError::Manifest(
-                crate::apk::ManifestError::Xml(crate::apk::axml::AxmlError::NotBinaryXml)
-            ))
+            Err(ApkError::Manifest(crate::apk::ManifestError::Xml(
+                crate::apk::axml::AxmlError::NotBinaryXml
+            )))
         ));
 
         let no_package = build_axml(&[start("manifest", vec![]), end()], false);
         let bytes = stored(&[e(MANIFEST_ENTRY, &no_package)]);
         assert_eq!(
             inspect(&bytes),
-            Err(ApkError::Manifest(crate::apk::ManifestError::MissingPackageName))
+            Err(ApkError::Manifest(
+                crate::apk::ManifestError::MissingPackageName
+            ))
         );
     }
 
@@ -457,7 +463,10 @@ mod tests {
         let report = inspect_bytes(&minimal_apk(), &limits).expect("inspect");
         assert!(matches!(
             report.dex_files[0].outcome,
-            Err(DexEntryError::Unreadable(ApkError::EntryTooLarge { max: 16, .. }))
+            Err(DexEntryError::Unreadable(ApkError::EntryTooLarge {
+                max: 16,
+                ..
+            }))
         ));
     }
 
@@ -469,7 +478,10 @@ mod tests {
             &[e(MANIFEST_ENTRY, &manifest), e("classes.dex", &zeros)],
             CompressionMethod::Deflated,
         );
-        assert!(bytes.len() < 100_000, "fixture should be small when compressed");
+        assert!(
+            bytes.len() < 100_000,
+            "fixture should be small when compressed"
+        );
 
         let limits = ApkLimits {
             max_dex_size: 1024 * 1024,
@@ -614,12 +626,18 @@ mod tests {
             e("aaa.txt", b"one"),
             e("bbb.txt", b"two"),
         ]);
-        patch_name(&mut bytes, b"bbb.txt", b"aaa.txt");
-        // Either our check or the ZIP library may be the first to notice.
-        assert!(matches!(
-            inspect(&bytes),
-            Err(ApkError::DuplicateEntry { .. }) | Err(ApkError::InvalidArchive { .. })
-        ));
+        let patched = patch_name(&mut bytes, b"bbb.txt", b"aaa.txt");
+        let result = inspect(&bytes);
+
+        assert_eq!(patched, 2, "test must patch both ZIP filename records");
+
+        assert!(
+            matches!(
+                result,
+                Err(ApkError::DuplicateEntry { .. }) | Err(ApkError::InvalidArchive { .. })
+            ),
+            "duplicate ZIP entry names must be rejected"
+        );
     }
 
     #[test]
@@ -657,7 +675,10 @@ mod tests {
         let nodes = vec![
             start(
                 "manifest",
-                vec![plain("package", TestValue::Str("com.example.res".to_owned()))],
+                vec![plain(
+                    "package",
+                    TestValue::Str("com.example.res".to_owned()),
+                )],
             ),
             start(
                 "application",
@@ -690,7 +711,10 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         assert_eq!(report.expect("inspect").manifest.package, "com.example.app");
-        assert!(matches!(too_big, Err(ApkError::FileTooLarge { max: 4, .. })));
+        assert!(matches!(
+            too_big,
+            Err(ApkError::FileTooLarge { max: 4, .. })
+        ));
 
         let missing = temp_path("missing");
         let _ = std::fs::remove_file(&missing);

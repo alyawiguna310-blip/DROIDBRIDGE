@@ -62,14 +62,16 @@ impl<R: Read + Seek> ApkArchive<R> {
             path: None,
             kind: e.kind(),
         })?;
-        if let Some(count) = declared {
-            if usize::from(count) > max_entries {
-                return Err(ApkError::TooManyEntries {
-                    count: usize::from(count),
-                    max: max_entries,
-                });
-            }
+        if let Some(count) = declared
+            && usize::from(count) > max_entries
+        {
+            return Err(ApkError::TooManyEntries {
+                count: usize::from(count),
+                max: max_entries,
+            });
         }
+
+        reject_duplicate_raw_names(&mut reader, max_entries)?;
 
         let mut zip = ZipArchive::new(reader).map_err(|e| ApkError::InvalidArchive {
             reason: e.to_string(),
@@ -202,6 +204,180 @@ fn has_drive_letter(name: &str) -> bool {
     bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
 
+/// Reject duplicate raw names before zip::ZipArchive builds its name-keyed map.
+fn reject_duplicate_raw_names<R: Read + Seek>(
+    reader: &mut R,
+    max_entries: usize,
+) -> Result<(), ApkError> {
+    use std::collections::HashSet;
+
+    const EOCD: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
+    const ZIP64_LOCATOR: [u8; 4] = [0x50, 0x4b, 0x06, 0x07];
+    const ZIP64_EOCD: [u8; 4] = [0x50, 0x4b, 0x06, 0x06];
+    const CENTRAL: [u8; 4] = [0x50, 0x4b, 0x01, 0x02];
+
+    fn invalid(reason: &str) -> ApkError {
+        ApkError::InvalidArchive {
+            reason: reason.to_owned(),
+        }
+    }
+
+    fn read_at<R: Read + Seek>(
+        reader: &mut R,
+        offset: u64,
+        buf: &mut [u8],
+    ) -> Result<(), ApkError> {
+        reader
+            .seek(SeekFrom::Start(offset))
+            .map_err(|e| ApkError::Io {
+                path: None,
+                kind: e.kind(),
+            })?;
+        reader.read_exact(buf).map_err(|e| {
+            if e.kind() == io::ErrorKind::UnexpectedEof {
+                invalid("truncated ZIP directory")
+            } else {
+                ApkError::Io {
+                    path: None,
+                    kind: e.kind(),
+                }
+            }
+        })
+    }
+
+    let result = (|| {
+        let len = reader.seek(SeekFrom::End(0)).map_err(|e| ApkError::Io {
+            path: None,
+            kind: e.kind(),
+        })?;
+
+        if len < 22 {
+            return Err(invalid("missing ZIP end-of-central-directory record"));
+        }
+
+        let tail_len = len.min(22 + 65_535);
+        let tail_start = len - tail_len;
+        let mut tail = vec![0; tail_len as usize];
+        read_at(reader, tail_start, &mut tail)?;
+
+        // Require the declared comment to fit in the file, so a signature
+        // occurring inside a comment is not mistaken for the EOCD.
+        let eocd_index = (0..=tail.len() - 22)
+            .rev()
+            .find(|&i| {
+                tail[i..i + 4] == EOCD
+                    && i + 22 + u16::from_le_bytes([tail[i + 20], tail[i + 21]]) as usize
+                        == tail.len()
+            })
+            .ok_or_else(|| invalid("invalid ZIP end-of-central-directory record"))?;
+
+        let eocd_pos = tail_start + eocd_index as u64;
+        let eocd = &tail[eocd_index..];
+        let mut count = u16::from_le_bytes([eocd[10], eocd[11]]) as u64;
+        let mut cd_size = u32::from_le_bytes(eocd[12..16].try_into().unwrap()) as u64;
+        let mut cd_offset = u32::from_le_bytes(eocd[16..20].try_into().unwrap()) as u64;
+        let mut cd_end = eocd_pos;
+
+        if count == u16::MAX as u64 || cd_size == u32::MAX as u64 || cd_offset == u32::MAX as u64 {
+            if eocd_pos < 20 {
+                return Err(invalid("missing ZIP64 locator"));
+            }
+
+            let mut locator = [0; 20];
+            read_at(reader, eocd_pos - 20, &mut locator)?;
+            if locator[..4] != ZIP64_LOCATOR {
+                return Err(invalid("missing ZIP64 locator"));
+            }
+
+            let zip64_pos = u64::from_le_bytes(locator[8..16].try_into().unwrap());
+            let mut z = [0; 56];
+            read_at(reader, zip64_pos, &mut z)?;
+            if z[..4] != ZIP64_EOCD {
+                return Err(invalid("invalid ZIP64 end record"));
+            }
+
+            count = u64::from_le_bytes(z[32..40].try_into().unwrap());
+            cd_size = u64::from_le_bytes(z[40..48].try_into().unwrap());
+            cd_offset = u64::from_le_bytes(z[48..56].try_into().unwrap());
+            cd_end = zip64_pos;
+        }
+
+        let max = max_entries as u64;
+        if count > max {
+            return Err(ApkError::TooManyEntries {
+                count: usize::try_from(count).unwrap_or(usize::MAX),
+                max: max_entries,
+            });
+        }
+
+        let cd_start = cd_end
+            .checked_sub(cd_size)
+            .ok_or_else(|| invalid("central directory offset underflow"))?;
+
+        // Account for a prepended stub (self-extracting ZIP).
+        let archive_offset = cd_start
+            .checked_sub(cd_offset)
+            .ok_or_else(|| invalid("invalid central directory offset"))?;
+        let mut pos = cd_offset
+            .checked_add(archive_offset)
+            .ok_or_else(|| invalid("central directory offset overflow"))?;
+        let cd_limit = cd_start
+            .checked_add(cd_size)
+            .ok_or_else(|| invalid("central directory size overflow"))?;
+
+        let mut names = HashSet::<Vec<u8>>::new();
+        for _ in 0..count {
+            let mut h = [0; 46];
+            read_at(reader, pos, &mut h)?;
+            if h[..4] != CENTRAL {
+                return Err(invalid("invalid central directory entry signature"));
+            }
+
+            let name_len = u16::from_le_bytes([h[28], h[29]]) as usize;
+            let extra_len = u16::from_le_bytes([h[30], h[31]]) as usize;
+            let comment_len = u16::from_le_bytes([h[32], h[33]]) as usize;
+            let variable_len = name_len
+                .checked_add(extra_len)
+                .and_then(|n| n.checked_add(comment_len))
+                .ok_or_else(|| invalid("central directory record length overflow"))?;
+            let record_end = pos
+                .checked_add(46)
+                .and_then(|n| n.checked_add(variable_len as u64))
+                .ok_or_else(|| invalid("central directory record offset overflow"))?;
+
+            if record_end > cd_limit || name_len == 0 {
+                return Err(invalid("central directory record exceeds directory bounds"));
+            }
+
+            let mut name = vec![0; name_len];
+            read_at(reader, pos + 46, &mut name)?;
+
+            if !names.insert(name.clone()) {
+                return Err(ApkError::DuplicateEntry {
+                    name: String::from_utf8_lossy(&name).into_owned(),
+                });
+            }
+
+            pos = record_end;
+        }
+
+        if pos > cd_limit {
+            return Err(invalid("central directory exceeds declared size"));
+        }
+
+        Ok(())
+    })();
+
+    // Keep the reader in the same initial position expected by the ZIP parser.
+    let rewind = reader.seek(SeekFrom::Start(0)).map_err(|e| ApkError::Io {
+        path: None,
+        kind: e.kind(),
+    });
+    result?;
+    rewind?;
+    Ok(())
+}
+
 /// Read the entry count from the end-of-central-directory record, if one can
 /// be found in the last 64 KiB. Leaves the reader at the start.
 fn eocd_entry_count<R: Read + Seek>(reader: &mut R) -> io::Result<Option<u16>> {
@@ -215,7 +391,11 @@ fn eocd_entry_count<R: Read + Seek>(reader: &mut R) -> io::Result<Option<u16>> {
         let last = tail.len() - EOCD_MIN_LEN;
         found = (0..=last)
             .rev()
-            .find(|&i| tail[i..i + 4] == EOCD_SIGNATURE)
+            .find(|&i| {
+                tail[i..i + 4] == EOCD_SIGNATURE
+                    && i + EOCD_MIN_LEN + u16::from_le_bytes([tail[i + 20], tail[i + 21]]) as usize
+                        == tail.len()
+            })
             .map(|i| u16::from_le_bytes([tail[i + 10], tail[i + 11]]));
     }
     reader.seek(SeekFrom::Start(0))?;
@@ -246,7 +426,6 @@ mod tests {
             "assets/..hidden",
             "assets/a..b",
             "META-INF/CERT.RSA",
-            "a:b",
         ] {
             assert_eq!(reason(name), None, "name {name:?}");
         }
@@ -261,6 +440,7 @@ mod tests {
         assert_eq!(reason(&backslash), Some(UnsafeEntryReason::Backslash));
         assert_eq!(reason("/etc/passwd"), Some(UnsafeEntryReason::Absolute));
         assert_eq!(reason("C:/x"), Some(UnsafeEntryReason::DriveLetter));
+        assert_eq!(reason("C:filename"), Some(UnsafeEntryReason::DriveLetter));
         assert_eq!(reason("../x"), Some(UnsafeEntryReason::ParentTraversal));
         assert_eq!(reason("a/../x"), Some(UnsafeEntryReason::ParentTraversal));
         assert_eq!(reason("a/.."), Some(UnsafeEntryReason::ParentTraversal));

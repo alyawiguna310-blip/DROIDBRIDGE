@@ -410,8 +410,10 @@ mod tests {
         registry.register(sample("a")).expect("register");
         registry.set_active("a").expect("activate");
 
-        let mut config = BridgeConfig::default();
-        config.schema_version = 5;
+        let config = BridgeConfig {
+            schema_version: 5,
+            ..BridgeConfig::default()
+        };
         assert_eq!(
             registry.apply_config(&config),
             Err(RegistryError::InvalidConfig(
@@ -419,8 +421,10 @@ mod tests {
             ))
         );
 
-        let mut config = BridgeConfig::default();
-        config.active_profile = "does-not-exist".to_owned();
+        let config = BridgeConfig {
+            active_profile: "does-not-exist".to_owned(),
+            ..BridgeConfig::default()
+        };
         assert_eq!(
             registry.apply_config(&config),
             Err(RegistryError::NotFound("does-not-exist".to_owned()))

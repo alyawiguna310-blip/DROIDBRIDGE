@@ -19,7 +19,9 @@ use std::fmt;
 pub enum ManifestValue<T> {
     Literal(T),
     /// A reference to resource `resource_id`, not resolved.
-    Unresolved { resource_id: u32 },
+    Unresolved {
+        resource_id: u32,
+    },
 }
 
 /// A `minSdkVersion` or `targetSdkVersion` value.
@@ -131,9 +133,7 @@ pub fn parse_manifest(bytes: &[u8], limits: &AxmlLimits) -> Result<ManifestInfo,
         }
     }
 
-    info.ok_or(ManifestError::Xml(AxmlError::Malformed(
-        "no root element",
-    )))
+    info.ok_or(ManifestError::Xml(AxmlError::Malformed("no root element")))
 }
 
 fn android_attr<'a>(attributes: &'a [XmlAttribute], name: &str) -> Option<&'a AttrValue> {

@@ -151,16 +151,16 @@ impl DeviceProfile {
             ));
         };
 
-        if let Some(existing) = object.get("id") {
-            if existing.as_str() != Some(id) {
-                return Err(ProfileError::IdMismatch {
-                    supplied: id.to_owned(),
-                    found: existing
-                        .as_str()
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| existing.to_string()),
-                });
-            }
+        if let Some(existing) = object.get("id")
+            && existing.as_str() != Some(id)
+        {
+            return Err(ProfileError::IdMismatch {
+                supplied: id.to_owned(),
+                found: existing
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| existing.to_string()),
+            });
         }
         object.insert("id".to_owned(), Value::String(id.to_owned()));
 

@@ -530,8 +530,10 @@ impl<'a> DexFile<'a> {
             .ok_or(DexError::Malformed("instruction count overflows"))?;
         let bytes = r.bytes(byte_len)?;
         let insns = bytes
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|chunk| u16::from_le_bytes(*chunk))
             .collect();
         Ok(CodeItem {
             registers_size,

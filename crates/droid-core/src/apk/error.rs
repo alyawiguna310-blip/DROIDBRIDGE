@@ -78,7 +78,10 @@ impl fmt::Display for ApkError {
             }
             Self::InvalidArchive { reason } => write!(f, "not a valid zip archive: {reason}"),
             Self::TooManyEntries { count, max } => {
-                write!(f, "archive has {count} entries, more than the limit of {max}")
+                write!(
+                    f,
+                    "archive has {count} entries, more than the limit of {max}"
+                )
             }
             Self::UnsafeEntryName { name, reason } => {
                 write!(f, "unsafe archive entry name {name:?}: {reason}")
