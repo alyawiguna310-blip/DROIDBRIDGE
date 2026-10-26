@@ -10,7 +10,7 @@ DROIDBRIDGE is planned as a shared core with host-specific integrations:
 
 ## Non-goals for the first milestones
 
-The scaffold does not emulate a CPU, execute DEX, implement ART, render Android graphics, provide Android system services, or install Google Play. These are separate milestones. Nothing in the repository can run an APK today.
+The scaffold does not implement ART, execute general DEX programs, render Android graphics, provide Android system services, or install Google Play. The core now has a deliberately restricted integer-only DEX interpreter, but nothing in the repository has yet demonstrated running a real APK.
 
 ## Layers
 
@@ -31,7 +31,7 @@ The scaffold does not emulate a CPU, execute DEX, implement ART, render Android 
 - `registry` — `ProfileRegistry`: in-memory store of validated profiles keyed by id, with an explicit active-profile selection.
 - `errors` — typed errors so callers match on variants instead of parsing strings.
 - `runtime` — adapter interfaces, capability declarations, validated launch requests, typed errors, and app-session lifecycle contracts. `runtime::waydroid::WaydroidBackend` is an initial Linux adapter around the documented Waydroid CLI; it has mocked-command tests but has not been tested against a live Waydroid installation.
-- `dex` — bounds-checked DEX parser (header, id tables, class data, code items). Parsing only; see "DEX parsing" below.
+- `dex` — bounds-checked DEX parser plus a limited, step-bounded integer instruction decoder/interpreter. It is not ART and cannot run Android apps; see "DEX parsing and limited execution" below.
 - `apk` — APK inspection (archive, binary manifest, DEX discovery, native library names). Inspection only; see "APK inspection" below.
 
 ## Profile identity and the registry
@@ -55,11 +55,13 @@ The `runtime` module specifies the boundary between the portable core and an ind
 
 The Waydroid adapter requires Waydroid to be installed and initialized and its user session/container to be running before launch. It does not automatically install or initialize Waydroid, start the session, inspect the APK manifest, verify that the supplied package name matches the APK, or apply the selected device-profile identity. It uses Waydroid's documented CLI for status, APK install, app launch, process polling, and force-stop. The adapter contract does not itself provide Android framework services or execute DEX, and command success does not guarantee an arbitrary app will run. A live test with a harmless test APK is still required.
 
-## DEX parsing
+## DEX parsing and limited execution
 
-`dex::DexFile::parse` validates the header (magic, version 035-039, header size, endian tag, file size, Adler-32 checksum, section bounds) and the string, type, proto, field, method and class-definition tables, including every stored index. Strings, class data and code items are decoded lazily by bounds-checked accessors. Counts read from the file are checked against the bytes actually present before anything is allocated, and every failure is a `DexError`.
+`dex::DexFile::parse` validates the header (magic, version 035-039, header size, endian tag, file size, Adler-32 checksum, section bounds) and the string, type, proto, field, method and class-definition tables, including every stored index. Strings, class data and code items are decoded lazily by bounds-checked accessors. Counts read from the file are checked against the bytes actually present before anything is allocated, and every parse failure is a `DexError`.
 
-Not implemented: SHA-1 signature verification, the map list, annotations, debug info, try/catch handlers, DEX 040 and later, and any execution. Parsing a DEX file says nothing about whether it can run.
+The separate `dex::decode_instruction` and `dex::execute_integer_method` APIs support a small opcode subset: move, const/4, const/16, const/32, 32-bit integer add/subtract/multiply/divide/remainder, return, goto, and integer conditional branches. Branches are checked against instruction boundaries, registers are bounds-checked, division by zero returns a typed error, try/catch methods and unknown opcodes are rejected, and the interpreter enforces a 262,144-code-unit method limit plus a hard cap of 1,000,000 executed instructions.
+
+This is not a general DEX VM. Object references, wide values, method invocation, fields, arrays, exception handling, native code and Android framework calls are not implemented. The SHA-1 signature, map list, annotations, debug info, DEX 040 and later also remain unsupported. The interpreter can evaluate certain integer methods supplied as `CodeItem`s; it does not load and run an APK.
 
 ## APK inspection
 
@@ -90,7 +92,7 @@ The balanced preset should prefer on-demand runtime startup, avoid duplicate ser
 
 1. Portable config and profile validation, profile registry (done).
 2. DEX parsing and APK archive inspection with binary manifest parsing (done, unexecuted).
-3. DEX instruction decoding and a minimal interpreter.
+3. DEX instruction decoding and a minimal interpreter (partial: bounded integer-only opcode subset; not a general DEX VM).
 4. Runtime adapter interface and backend capability report (contract plus initial Waydroid CLI adapter implemented; not live-validated).
 5. Launch a real test APK through a selected runtime (not yet verified).
 6. Validate graphics acceleration, input, lifecycle and app isolation.
