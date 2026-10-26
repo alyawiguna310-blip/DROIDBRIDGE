@@ -185,8 +185,12 @@ pub enum RuntimeSessionState {
     /// The launch command was accepted, but the app process has not appeared yet.
     Starting,
     Running,
-    Exited { exit_code: Option<i32> },
-    Failed { reason: String },
+    Exited {
+        exit_code: Option<i32>,
+    },
+    Failed {
+        reason: String,
+    },
 }
 
 /// Handle used to observe and stop one launched app session.
