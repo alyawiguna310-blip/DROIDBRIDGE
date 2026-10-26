@@ -51,6 +51,13 @@ pub(crate) struct ApkArchive<R: Read + Seek> {
     index: HashMap<String, usize>,
 }
 
+/// Returns whether a classic EOCD entry count is authoritative and exceeds the
+/// configured limit. ZIP64 uses 0xFFFF as a sentinel, so that value must be
+/// resolved from the ZIP64 end record instead of treated as an actual count.
+fn classic_count_exceeds_limit(count: u16, max_entries: usize) -> bool {
+    count != u16::MAX && usize::from(count) > max_entries
+}
+
 impl<R: Read + Seek> ApkArchive<R> {
     /// Open the archive and validate every entry name.
     ///
@@ -63,7 +70,7 @@ impl<R: Read + Seek> ApkArchive<R> {
             kind: e.kind(),
         })?;
         if let Some(count) = declared
-            && usize::from(count) > max_entries
+            && classic_count_exceeds_limit(count, max_entries)
         {
             return Err(ApkError::TooManyEntries {
                 count: usize::from(count),
@@ -215,6 +222,7 @@ fn reject_duplicate_raw_names<R: Read + Seek>(
     const ZIP64_LOCATOR: [u8; 4] = [0x50, 0x4b, 0x06, 0x07];
     const ZIP64_EOCD: [u8; 4] = [0x50, 0x4b, 0x06, 0x06];
     const CENTRAL: [u8; 4] = [0x50, 0x4b, 0x01, 0x02];
+    const DIGITAL_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x05, 0x05];
 
     fn invalid(reason: &str) -> ApkError {
         ApkError::InvalidArchive {
@@ -365,6 +373,30 @@ fn reject_duplicate_raw_names<R: Read + Seek>(
             return Err(invalid("central directory exceeds declared size"));
         }
 
+        // The declared count must consume the whole central directory. ZIP
+        // permits one optional central-directory digital-signature record
+        // after the file headers; no arbitrary trailing bytes are accepted.
+        if pos < cd_limit {
+            if cd_limit - pos < 6 {
+                return Err(invalid("unexpected trailing bytes in central directory"));
+            }
+
+            let mut signature = [0; 6];
+            read_at(reader, pos, &mut signature)?;
+            if signature[..4] != DIGITAL_SIGNATURE {
+                return Err(invalid("unexpected trailing bytes in central directory"));
+            }
+
+            let signature_len = u16::from_le_bytes([signature[4], signature[5]]) as u64;
+            let signature_end = pos
+                .checked_add(6)
+                .and_then(|start| start.checked_add(signature_len))
+                .ok_or_else(|| invalid("central directory signature length overflow"))?;
+            if signature_end != cd_limit {
+                return Err(invalid("invalid central directory digital signature length"));
+            }
+        }
+
         Ok(())
     })();
 
@@ -449,6 +481,72 @@ mod tests {
             Some(UnsafeEntryReason::TooLong)
         );
         assert_eq!(reason(&"a".repeat(MAX_ENTRY_NAME_LEN)), None);
+    }
+
+    #[test]
+    fn zip64_entry_count_sentinel_is_not_treated_as_a_classic_count() {
+        assert!(!classic_count_exceeds_limit(u16::MAX, 512));
+        assert!(classic_count_exceeds_limit(513, 512));
+        assert!(!classic_count_exceeds_limit(512, 512));
+    }
+
+    fn zip_with_one_file() -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .start_file("entry.txt", zip::write::SimpleFileOptions::default())
+            .expect("start file");
+        writer.write_all(b"payload").expect("write file");
+        writer.finish().expect("finish ZIP").into_inner()
+    }
+
+    fn eocd_offset(bytes: &[u8]) -> usize {
+        assert!(bytes.len() >= EOCD_MIN_LEN);
+        (0..=bytes.len() - EOCD_MIN_LEN)
+            .rev()
+            .find(|&i| {
+                bytes[i..i + 4] == EOCD_SIGNATURE
+                    && i + EOCD_MIN_LEN
+                        + u16::from_le_bytes([bytes[i + 20], bytes[i + 21]]) as usize
+                        == bytes.len()
+            })
+            .expect("EOCD")
+    }
+
+    fn extend_central_directory(bytes: &mut Vec<u8>, trailer: &[u8]) -> usize {
+        let eocd = eocd_offset(bytes);
+        let old_size =
+            u32::from_le_bytes(bytes[eocd + 12..eocd + 16].try_into().expect("CD size"));
+        bytes.splice(eocd..eocd, trailer.iter().copied());
+        let new_eocd = eocd + trailer.len();
+        let new_size = old_size
+            .checked_add(u32::try_from(trailer.len()).expect("trailer length"))
+            .expect("central directory size");
+        bytes[new_eocd + 12..new_eocd + 16].copy_from_slice(&new_size.to_le_bytes());
+        new_eocd
+    }
+
+    #[test]
+    fn accepts_well_formed_central_directory_digital_signature() {
+        let mut bytes = zip_with_one_file();
+        extend_central_directory(&mut bytes, &[0x50, 0x4b, 0x05, 0x05, 0x00, 0x00]);
+
+        let mut reader = Cursor::new(bytes);
+        assert!(reject_duplicate_raw_names(&mut reader, 10).is_ok());
+        assert_eq!(reader.position(), 0);
+    }
+
+    #[test]
+    fn rejects_arbitrary_central_directory_trailing_data() {
+        let mut bytes = zip_with_one_file();
+        extend_central_directory(&mut bytes, &[0x99]);
+
+        let mut reader = Cursor::new(bytes);
+        assert!(matches!(
+            reject_duplicate_raw_names(&mut reader, 10),
+            Err(ApkError::InvalidArchive { reason })
+                if reason.contains("trailing bytes")
+        ));
+        assert_eq!(reader.position(), 0);
     }
 
     #[test]
