@@ -437,6 +437,7 @@ fn eocd_entry_count<R: Read + Seek>(reader: &mut R) -> io::Result<Option<u16>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Cursor, Write};
 
     fn reason(name: &str) -> Option<UnsafeEntryReason> {
         match validate_entry_name(name) {
