@@ -10,7 +10,7 @@ use super::{
 };
 use std::ffi::OsString;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
@@ -433,10 +433,11 @@ mod tests {
         assert!(valid_package_name("org.example_app.game2"));
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn fake_waydroid_exercises_install_launch_poll_and_stop() {
         use std::os::unix::fs::PermissionsExt;
+        use std::path::Path;
         use std::sync::atomic::{AtomicU64, Ordering};
 
         static NEXT_ID: AtomicU64 = AtomicU64::new(0);
