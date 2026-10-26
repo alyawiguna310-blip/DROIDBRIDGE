@@ -9,7 +9,7 @@
 //! - [`profile`]: [`DeviceProfile`] schema (with a stable `id`) and validation.
 //! - [`registry`]: [`ProfileRegistry`] for loading, looking up, and selecting profiles.
 //! - [`errors`]: typed errors for all of the above.
-//! - [`runtime`]: contracts for pluggable Android runtime backends; no backend is implemented yet.
+//! - [`runtime`]: pluggable runtime contracts and the initial Linux Waydroid CLI adapter.
 //! - [`dex`]: bounds-checked parser for DEX files (untrusted input).
 //! - [`apk`]: APK inspection (archive, binary manifest, DEX discovery); never executes code.
 
@@ -29,3 +29,4 @@ pub use runtime::{
     BackendStatus, CapabilitySupport, LaunchRequest, RuntimeBackend, RuntimeBackendInfo,
     RuntimeCapabilities, RuntimeError, RuntimeOperation, RuntimeSession, RuntimeSessionState,
 };
+pub use runtime::waydroid::WaydroidBackend;
