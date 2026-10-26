@@ -9,6 +9,7 @@
 //! - [`profile`]: [`DeviceProfile`] schema (with a stable `id`) and validation.
 //! - [`registry`]: [`ProfileRegistry`] for loading, looking up, and selecting profiles.
 //! - [`errors`]: typed errors for all of the above.
+//! - [`host`]: read-only report of target OS/architecture and process-available logical CPUs.
 //! - [`dex`]: bounds-checked parser for DEX files (untrusted input).
 //! - [`apk`]: APK inspection (archive, binary manifest, DEX discovery); never executes code.
 
