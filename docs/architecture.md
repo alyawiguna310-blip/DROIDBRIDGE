@@ -15,21 +15,22 @@ The scaffold does not emulate a CPU, execute DEX, implement ART, render Android 
 ## Layers
 
 1. **Host frontend** — native windows, settings, input, accessibility, and host integration.
-2. **DroidCore** — portable configuration, app metadata models, lifecycle contracts.
+2. **DroidCore** — portable configuration, profile schema, runtime-backend contracts, and app metadata models.
 3. **APK inspector** — safe ZIP/APK inspection, manifest parsing, ABI and SDK detection.
-4. **Runtime adapter** — launches and monitors an independently provisioned Android runtime.
+4. **Runtime adapter** — a defined core contract for probing a backend, launching an app, and monitoring/stopping its session; concrete adapters remain unimplemented.
 5. **Android runtime** — ART, framework APIs, system services, graphics and app lifecycle.
 6. **Native-code compatibility** — execute compatible host-native libraries directly where possible; use ARM translation only when necessary and supported.
 7. **Google services** — optional, legally provisioned integration evaluated separately for each runtime.
 
-## Core crate modules (implemented)
+## Core crate modules
 
-`droid-core` currently contains `config`, `profile`, `registry`, `errors`, `dex` and `apk`. Everything else in the layer list above is still planned.
+`droid-core` contains `config`, `profile`, `registry`, `errors`, `dex`, `apk`, and `runtime`.
 
 - `config` — `BridgeConfig`, versioned (`schema_version` 1), serializable, validated.
 - `profile` — `DeviceProfile` and profile-id validation.
 - `registry` — `ProfileRegistry`: in-memory store of validated profiles keyed by id, with an explicit active-profile selection.
 - `errors` — typed errors so callers match on variants instead of parsing strings.
+- `runtime` — adapter interfaces, capability declarations, validated launch requests, typed errors, and app-session lifecycle contracts. This is an interface only; there is no concrete runtime backend yet.
 - `dex` — bounds-checked DEX parser (header, id tables, class data, code items). Parsing only; see "DEX parsing" below.
 - `apk` — APK inspection (archive, binary manifest, DEX discovery, native library names). Inspection only; see "APK inspection" below.
 
@@ -42,6 +43,17 @@ A profile has a stable machine `id` that is separate from its display `profile_n
 - Selecting an unknown id fails and leaves the previous selection unchanged.
 - Profile JSON without an `id` is rejected (`ProfileError::MissingId`). Migration of such files is explicit, through `from_legacy_json(json, id)`, and never guesses an id.
 - The registry holds no hardcoded profiles. `POCO_F6` is only a fixture and the default `active_profile` value; `apply_config` fails with `NotFound` if it has not been registered.
+
+## Runtime backend contract
+
+The `runtime` module specifies the boundary between the portable core and an independently provisioned Android runtime:
+
+- `RuntimeBackend` exposes backend identity, capability declarations, a readiness probe, and an app launch operation.
+- `RuntimeCapabilities` uses `CapabilitySupport::Unknown` by default so an adapter cannot imply verified ARM64 execution, APK launch/install, or hardware-accelerated graphics without reporting that evidence.
+- `LaunchRequest` requires a nonempty APK path and package name plus a valid stable profile id. Construction does not inspect the APK, check file existence, install it, or guarantee compatibility.
+- `RuntimeSession` provides state polling and a stop request. Typed `RuntimeError` variants allow frontends to handle failures without parsing human-readable messages.
+
+No concrete backend is implemented. The contract does not start a VM, provide Android framework services, execute DEX, or guarantee that any APK can run. Those behaviors require a separate adapter connected to an actual runtime.
 
 ## DEX parsing
 
@@ -79,7 +91,7 @@ The balanced preset should prefer on-demand runtime startup, avoid duplicate ser
 1. Portable config and profile validation, profile registry (done).
 2. DEX parsing and APK archive inspection with binary manifest parsing (done, unexecuted).
 3. DEX instruction decoding and a minimal interpreter.
-4. Runtime adapter interface and backend capability report.
+4. Runtime adapter interface and backend capability report (interface contract defined; no concrete adapter yet).
 5. Launch a real test APK through a selected runtime.
 6. Validate graphics acceleration, input, lifecycle and app isolation.
 7. Evaluate ARM64 native library support.
