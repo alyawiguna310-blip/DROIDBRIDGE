@@ -1,11 +1,13 @@
 //! Read-only report of host capabilities visible to the current core process.
+
+use sysinfo::System;
 //!
 //! This module deliberately reports host/build facts separately from
 //! Android-facing [`crate::DeviceProfile`] identity. It does not spoof device
 //! properties or claim support for CPU instructions, GPU features, or graphics
 //! APIs that have not been detected.
 
-/// Basic host information available without platform-specific dependencies.
+/// Basic host information collected through portable Rust APIs and sysinfo.
 ///
 /// The OS and architecture are Rust's compile-time target constants. In a
 /// native build they describe the host platform; in a cross-compiled build
@@ -13,8 +15,8 @@
 /// runtime and may be lower than the machine's physical/logical CPU total due
 /// to affinity, containers, or process limits.
 ///
-/// RAM, GPU details, SIMD extensions, and graphics API support are intentionally
-/// not inferred here. Those require dedicated, platform-aware probes.
+/// GPU details, SIMD extensions, and graphics API support are intentionally not
+/// inferred here. Those require dedicated, platform-aware probes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostCapabilities {
     /// Operating-system target name reported by std::env::consts::OS.
@@ -23,20 +25,37 @@ pub struct HostCapabilities {
     pub architecture: &'static str,
     /// Logical CPUs available to the current process, when the OS query works.
     pub available_logical_cpus: Option<usize>,
+    /// Total physical memory reported by the operating system, in bytes.
+    pub total_memory_bytes: Option<u64>,
+    /// Memory the operating system currently considers available, in bytes.
+    pub available_memory_bytes: Option<u64>,
 }
 
 impl HostCapabilities {
-    /// Query the host-process information that Rust's standard library exposes.
+    /// Query basic host-process and system-memory information.
     ///
-    /// Failure to query the available logical CPU count is represented as
-    /// None; it does not make the whole host report unavailable.
+    /// Failure to query the logical CPU count or memory values is represented
+    /// as `None`; it does not make the whole host report unavailable. Memory
+    /// fields are populated only when the system reports a nonzero total.
     pub fn detect() -> Self {
+        let mut system = System::new();
+        system.refresh_memory();
+
+        let total_memory = system.total_memory();
+        let (total_memory_bytes, available_memory_bytes) = if total_memory > 0 {
+            (Some(total_memory), Some(system.available_memory()))
+        } else {
+            (None, None)
+        };
+
         Self {
             operating_system: std::env::consts::OS,
             architecture: std::env::consts::ARCH,
             available_logical_cpus: std::thread::available_parallelism()
                 .ok()
                 .map(|count| count.get()),
+            total_memory_bytes,
+            available_memory_bytes,
         }
     }
 }
@@ -61,6 +80,20 @@ mod tests {
             host.available_logical_cpus.is_none_or(|count| count > 0),
             "a reported logical CPU count must be nonzero"
         );
+    }
+
+    #[test]
+    fn memory_values_are_consistent_when_reported() {
+        let host = HostCapabilities::detect();
+
+        match (host.total_memory_bytes, host.available_memory_bytes) {
+            (Some(total), Some(available)) => {
+                assert!(total > 0);
+                assert!(available <= total);
+            }
+            (None, None) => {}
+            _ => panic!("total and available memory must be reported together"),
+        }
     }
 
     #[test]
