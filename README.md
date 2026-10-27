@@ -22,6 +22,7 @@ Device identity profiles must not claim unsupported CPU instructions or GPU capa
 ## Repository layout
 
 - `crates/droid-core` — shared core crate:
+  - `src/bin/droidbridge.rs` — CLI for APK inspection, Waydroid status, and verified launch requests.
   - `config` — portable, versioned `BridgeConfig`.
   - `profile` — `DeviceProfile` schema and validation.
   - `registry` — `ProfileRegistry` for loading, lookup, and active-profile selection.
@@ -93,6 +94,23 @@ This contract is not an emulator. The initial `WaydroidBackend` calls the docume
 The public `launch_verified_apk` function checks an APK using the configured `ApkLimits`, requires the manifest package to match the requested package exactly, checks that the backend reports `Ready`, and requires explicit support for both APK installation and package launch before invoking the backend. The returned result includes the inspection report and runtime session.
 
 This preflight prevents accidental package/APK mismatches and avoids installing an APK when the backend is not ready or has not confirmed the required operations. It does not prove that the app is compatible, safe to execute, or able to render; actual launch and graphics validation on a live Waydroid system are still pending.
+
+## Command-line interface
+
+Run the CLI from the workspace root:
+
+```sh
+cargo run -p droid-core --bin droidbridge -- help
+cargo run -p droid-core --bin droidbridge -- inspect "/path/to/app.apk"
+cargo run -p droid-core --bin droidbridge -- status
+cargo run -p droid-core --bin droidbridge -- launch "/path/to/app.apk" com.example.app POCO_F6
+```
+
+- `inspect` prints the parsed manifest metadata, permissions, DEX parse results, native-library names, and warnings. It does not install or execute the APK.
+- `status` probes the existing Waydroid environment and prints the adapter's declared capabilities.
+- `launch` runs the verified preflight before delegating to Waydroid, then waits for the target process to be observed. The package name must exactly match the APK manifest. If omitted, the profile id defaults to `POCO_F6`.
+
+The CLI does not install or initialize Waydroid, start its session, apply device-identity spoofing, or prove general app compatibility. The profile id is currently carried as launch-request metadata only. A real launch has not yet been verified on a live Waydroid installation.
 
 ## Development
 
