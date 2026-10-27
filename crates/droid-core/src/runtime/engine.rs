@@ -425,7 +425,10 @@ pub fn execute_static_scalar_method_in_dex_set_at(
         .map_err(|error| match error {
             EngineError::StaticCallFailed { method_idx, reason } => static_call_failed(
                 method_idx,
-                format!("while executing {}: {reason}", method_signature_label(&signature)),
+                format!(
+                    "while executing {}: {reason}",
+                    method_signature_label(&signature)
+                ),
             ),
             other => other,
         })?;
@@ -556,7 +559,10 @@ fn execute_dex_method_index(
         .map_err(|error| match error {
             EngineError::StaticCallFailed { method_idx, reason } => static_call_failed(
                 method_idx,
-                format!("while executing {}: {reason}", method_signature_label(&signature)),
+                format!(
+                    "while executing {}: {reason}",
+                    method_signature_label(&signature)
+                ),
             ),
             other => other,
         })?;
