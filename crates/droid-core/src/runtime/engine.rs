@@ -261,19 +261,50 @@ pub fn execute_static_scalar_method_in_dex_set(
     method_name: &str,
     parameters: &[i32],
 ) -> Result<MethodExecutionReport, MethodExecutionError> {
-    let mut selected_class = None;
+    let mut root_dex_index = None;
     for (dex_index, dex) in dexes.iter().enumerate() {
         for class in dex.class_defs() {
             if dex.type_descriptor(class.class_idx)? == class_descriptor {
-                selected_class = Some((dex_index, class));
+                root_dex_index = Some(dex_index);
                 break;
             }
         }
-        if selected_class.is_some() {
+        if root_dex_index.is_some() {
             break;
         }
     }
-    let (dex_index, class) = selected_class.ok_or_else(|| MethodExecutionError::ClassNotFound {
+    let root_dex_index = root_dex_index.ok_or_else(|| MethodExecutionError::ClassNotFound {
+        class_descriptor: class_descriptor.to_owned(),
+    })?;
+    execute_static_scalar_method_in_dex_set_at(
+        dexes,
+        root_dex_index,
+        class_descriptor,
+        method_name,
+        parameters,
+    )
+}
+
+/// Execute a scalar method starting from a specific DEX entry in a loaded set.
+pub fn execute_static_scalar_method_in_dex_set_at(
+    dexes: &[DexFile<'_>],
+    root_dex_index: usize,
+    class_descriptor: &str,
+    method_name: &str,
+    parameters: &[i32],
+) -> Result<MethodExecutionReport, MethodExecutionError> {
+    let dex_index = root_dex_index;
+    let dex = dexes.get(dex_index).ok_or_else(|| MethodExecutionError::ClassNotFound {
+        class_descriptor: class_descriptor.to_owned(),
+    })?;
+    let mut selected_class = None;
+    for class in dex.class_defs() {
+        if dex.type_descriptor(class.class_idx)? == class_descriptor {
+            selected_class = Some(class);
+            break;
+        }
+    }
+    let class = selected_class.ok_or_else(|| MethodExecutionError::ClassNotFound {
         class_descriptor: class_descriptor.to_owned(),
     })?;
     let dex = &dexes[dex_index];
