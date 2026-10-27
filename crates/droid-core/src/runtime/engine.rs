@@ -293,8 +293,7 @@ pub fn execute_static_integer_method(
         max_steps: engine.limits.max_instruction_steps,
         steps: 0,
     };
-    let mut resolver =
-        |target_method_idx: u32, arguments: &[i32], budget: &mut ExecutionBudget| {
+    let mut resolver = |target_method_idx: u32, arguments: &[i32], budget: &mut ExecutionBudget| {
         execute_dex_method_index(dex, target_method_idx, arguments, &engine, budget, 1)
     };
     let execution =
@@ -354,8 +353,7 @@ fn execute_dex_method_index(
     let code = dex
         .code_item(method.code_off)
         .map_err(|error| static_call_failed(method_idx, error))?;
-    let mut resolver =
-        |child_method_idx: u32, arguments: &[i32], budget: &mut ExecutionBudget| {
+    let mut resolver = |child_method_idx: u32, arguments: &[i32], budget: &mut ExecutionBudget| {
         execute_dex_method_index(dex, child_method_idx, arguments, engine, budget, depth + 1)
     };
     let report = engine.execute_with_budget(&code, parameters, budget, Some(&mut resolver))?;
