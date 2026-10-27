@@ -329,159 +329,159 @@ impl<'dexes, 'data> DexSetExecutor<'dexes, 'data> {
         method_name: &str,
         parameters: &[i32],
     ) -> Result<MethodExecutionReport, MethodExecutionError> {
-    let dexes = self.dexes;
-    let dex_index = root_dex_index;
-    let dex = dexes
-        .get(dex_index)
-        .ok_or_else(|| MethodExecutionError::ClassNotFound {
+        let dexes = self.dexes;
+        let dex_index = root_dex_index;
+        let dex = dexes
+            .get(dex_index)
+            .ok_or_else(|| MethodExecutionError::ClassNotFound {
+                class_descriptor: class_descriptor.to_owned(),
+            })?;
+        let mut selected_class = None;
+        for class in dex.class_defs() {
+            if dex.type_descriptor(class.class_idx)? == class_descriptor {
+                selected_class = Some(class);
+                break;
+            }
+        }
+        let class = selected_class.ok_or_else(|| MethodExecutionError::ClassNotFound {
             class_descriptor: class_descriptor.to_owned(),
         })?;
-    let mut selected_class = None;
-    for class in dex.class_defs() {
-        if dex.type_descriptor(class.class_idx)? == class_descriptor {
-            selected_class = Some(class);
-            break;
+        let dex = &dexes[dex_index];
+        let Some(data) = dex.class_data(class)? else {
+            return Err(MethodExecutionError::MethodNotFound {
+                class_descriptor: class_descriptor.to_owned(),
+                method_name: method_name.to_owned(),
+            });
+        };
+
+        let mut same_name = Vec::new();
+        for method in data
+            .direct_methods
+            .iter()
+            .chain(data.virtual_methods.iter())
+        {
+            let signature = dex.method_signature(method.method_idx)?;
+            if signature.name == method_name {
+                same_name.push((dex_index, *method, signature));
+            }
         }
-    }
-    let class = selected_class.ok_or_else(|| MethodExecutionError::ClassNotFound {
-        class_descriptor: class_descriptor.to_owned(),
-    })?;
-    let dex = &dexes[dex_index];
-    let Some(data) = dex.class_data(class)? else {
-        return Err(MethodExecutionError::MethodNotFound {
-            class_descriptor: class_descriptor.to_owned(),
-            method_name: method_name.to_owned(),
-        });
-    };
-
-    let mut same_name = Vec::new();
-    for method in data
-        .direct_methods
-        .iter()
-        .chain(data.virtual_methods.iter())
-    {
-        let signature = dex.method_signature(method.method_idx)?;
-        if signature.name == method_name {
-            same_name.push((dex_index, *method, signature));
-        }
-    }
-    if same_name.is_empty() {
-        return Err(MethodExecutionError::MethodNotFound {
-            class_descriptor: class_descriptor.to_owned(),
-            method_name: method_name.to_owned(),
-        });
-    }
-
-    let static_methods: Vec<_> = same_name
-        .into_iter()
-        .filter(|(_, method, _)| method.access_flags & 0x8 != 0)
-        .collect();
-    if static_methods.is_empty() {
-        return Err(MethodExecutionError::MethodIsNotStatic {
-            class_descriptor: class_descriptor.to_owned(),
-            method_name: method_name.to_owned(),
-        });
-    }
-
-    let mut expected: Vec<usize> = static_methods
-        .iter()
-        .map(|(_, _, signature)| signature.parameter_types.len())
-        .collect();
-    expected.sort_unstable();
-    expected.dedup();
-
-    let matching_arity: Vec<_> = static_methods
-        .into_iter()
-        .filter(|(_, _, signature)| signature.parameter_types.len() == parameters.len())
-        .collect();
-    if matching_arity.is_empty() {
-        return Err(MethodExecutionError::ArgumentCountMismatch {
-            class_descriptor: class_descriptor.to_owned(),
-            method_name: method_name.to_owned(),
-            actual: parameters.len(),
-            expected,
-        });
-    }
-
-    let supported: Vec<_> = matching_arity
-        .into_iter()
-        .filter(|(_, _, signature)| {
-            is_int_like_type(&signature.return_type)
-                && signature
-                    .parameter_types
-                    .iter()
-                    .all(|ty| is_int_like_type(ty))
-        })
-        .collect();
-    if supported.is_empty() {
-        let signature = same_name_signature_label(class_descriptor, method_name, parameters.len());
-        return Err(MethodExecutionError::UnsupportedSignature { signature });
-    }
-    if supported.len() > 1 {
-        return Err(MethodExecutionError::AmbiguousMethod {
-            signature: same_name_signature_label(class_descriptor, method_name, parameters.len()),
-        });
-    }
-
-    let (dex_index, method, signature) = supported.into_iter().next().expect("one supported match");
-    if method.code_off == 0 {
-        return Err(MethodExecutionError::MethodHasNoCode {
-            signature: method_signature_label(&signature),
-        });
-    }
-    let code = dexes[dex_index].code_item(method.code_off)?;
-    let engine = IntegerDexEngine::default();
-    let context = DexExecutionContext {
-        dexes,
-        method_index: &self.method_index,
-        engine: &engine,
-    };
-    let mut budget = ExecutionBudget {
-        max_steps: engine.limits.max_instruction_steps,
-        steps: 0,
-    };
-    let normalized_parameters: Vec<i32> = signature
-        .parameter_types
-        .iter()
-        .zip(parameters.iter().copied())
-        .map(|(ty, value)| normalize_int_like(ty, value))
-        .collect();
-    let mut resolver = |target_method_idx: u32, arguments: &[i32], budget: &mut ExecutionBudget| {
-        execute_dex_method_index(&context, dex_index, target_method_idx, arguments, budget, 1)
-    };
-    let mut execution = engine
-        .execute_with_budget(
-            &code,
-            &normalized_parameters,
-            &mut budget,
-            Some(&mut resolver),
-        )
-        .map_err(|error| match error {
-            EngineError::StaticCallFailed { method_idx, reason } => static_call_failed(
-                method_idx,
-                format!(
-                    "while executing {}: {reason}",
-                    method_signature_label(&signature)
-                ),
-            ),
-            other => other,
-        })?;
-    match execution.return_value {
-        EngineReturn::Int(value) => {
-            execution.return_value =
-                EngineReturn::Int(normalize_int_like(&signature.return_type, value));
-        }
-        EngineReturn::Void => {
-            return Err(MethodExecutionError::ReturnTypeMismatch {
-                signature: method_signature_label(&signature),
-                expected: signature.return_type.clone(),
+        if same_name.is_empty() {
+            return Err(MethodExecutionError::MethodNotFound {
+                class_descriptor: class_descriptor.to_owned(),
+                method_name: method_name.to_owned(),
             });
         }
-    }
-    Ok(MethodExecutionReport {
-        signature,
-        execution,
-    })
+
+        let static_methods: Vec<_> = same_name
+            .into_iter()
+            .filter(|(_, method, _)| method.access_flags & 0x8 != 0)
+            .collect();
+        if static_methods.is_empty() {
+            return Err(MethodExecutionError::MethodIsNotStatic {
+                class_descriptor: class_descriptor.to_owned(),
+                method_name: method_name.to_owned(),
+            });
+        }
+
+        let mut expected: Vec<usize> = static_methods
+            .iter()
+            .map(|(_, _, signature)| signature.parameter_types.len())
+            .collect();
+        expected.sort_unstable();
+        expected.dedup();
+
+        let matching_arity: Vec<_> = static_methods
+            .into_iter()
+            .filter(|(_, _, signature)| signature.parameter_types.len() == parameters.len())
+            .collect();
+        if matching_arity.is_empty() {
+            return Err(MethodExecutionError::ArgumentCountMismatch {
+                class_descriptor: class_descriptor.to_owned(),
+                method_name: method_name.to_owned(),
+                actual: parameters.len(),
+                expected,
+            });
+        }
+
+        let supported: Vec<_> = matching_arity
+            .into_iter()
+            .filter(|(_, _, signature)| {
+                is_int_like_type(&signature.return_type)
+                    && signature
+                        .parameter_types
+                        .iter()
+                        .all(|ty| is_int_like_type(ty))
+            })
+            .collect();
+        if supported.is_empty() {
+            let signature = same_name_signature_label(class_descriptor, method_name, parameters.len());
+            return Err(MethodExecutionError::UnsupportedSignature { signature });
+        }
+        if supported.len() > 1 {
+            return Err(MethodExecutionError::AmbiguousMethod {
+                signature: same_name_signature_label(class_descriptor, method_name, parameters.len()),
+            });
+        }
+
+        let (dex_index, method, signature) = supported.into_iter().next().expect("one supported match");
+        if method.code_off == 0 {
+            return Err(MethodExecutionError::MethodHasNoCode {
+                signature: method_signature_label(&signature),
+            });
+        }
+        let code = dexes[dex_index].code_item(method.code_off)?;
+        let engine = IntegerDexEngine::default();
+        let context = DexExecutionContext {
+            dexes,
+            method_index: &self.method_index,
+            engine: &engine,
+        };
+        let mut budget = ExecutionBudget {
+            max_steps: engine.limits.max_instruction_steps,
+            steps: 0,
+        };
+        let normalized_parameters: Vec<i32> = signature
+            .parameter_types
+            .iter()
+            .zip(parameters.iter().copied())
+            .map(|(ty, value)| normalize_int_like(ty, value))
+            .collect();
+        let mut resolver = |target_method_idx: u32, arguments: &[i32], budget: &mut ExecutionBudget| {
+            execute_dex_method_index(&context, dex_index, target_method_idx, arguments, budget, 1)
+        };
+        let mut execution = engine
+            .execute_with_budget(
+                &code,
+                &normalized_parameters,
+                &mut budget,
+                Some(&mut resolver),
+            )
+            .map_err(|error| match error {
+                EngineError::StaticCallFailed { method_idx, reason } => static_call_failed(
+                    method_idx,
+                    format!(
+                        "while executing {}: {reason}",
+                        method_signature_label(&signature)
+                    ),
+                ),
+                other => other,
+            })?;
+        match execution.return_value {
+            EngineReturn::Int(value) => {
+                execution.return_value =
+                    EngineReturn::Int(normalize_int_like(&signature.return_type, value));
+            }
+            EngineReturn::Void => {
+                return Err(MethodExecutionError::ReturnTypeMismatch {
+                    signature: method_signature_label(&signature),
+                    expected: signature.return_type.clone(),
+                });
+            }
+        }
+        Ok(MethodExecutionReport {
+            signature,
+            execution,
+        })
     }
 }
 
