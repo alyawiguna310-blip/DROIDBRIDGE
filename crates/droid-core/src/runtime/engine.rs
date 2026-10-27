@@ -294,9 +294,11 @@ pub fn execute_static_scalar_method_in_dex_set_at(
     parameters: &[i32],
 ) -> Result<MethodExecutionReport, MethodExecutionError> {
     let dex_index = root_dex_index;
-    let dex = dexes.get(dex_index).ok_or_else(|| MethodExecutionError::ClassNotFound {
-        class_descriptor: class_descriptor.to_owned(),
-    })?;
+    let dex = dexes
+        .get(dex_index)
+        .ok_or_else(|| MethodExecutionError::ClassNotFound {
+            class_descriptor: class_descriptor.to_owned(),
+        })?;
     let mut selected_class = None;
     for class in dex.class_defs() {
         if dex.type_descriptor(class.class_idx)? == class_descriptor {
@@ -402,18 +404,17 @@ pub fn execute_static_scalar_method_in_dex_set_at(
         .zip(parameters.iter().copied())
         .map(|(ty, value)| normalize_int_like(ty, value))
         .collect();
-    let mut resolver =
-        |target_method_idx: u32, arguments: &[i32], budget: &mut ExecutionBudget| {
-            execute_dex_method_index(
-                dexes,
-                dex_index,
-                target_method_idx,
-                arguments,
-                &engine,
-                budget,
-                1,
-            )
-        };
+    let mut resolver = |target_method_idx: u32, arguments: &[i32], budget: &mut ExecutionBudget| {
+        execute_dex_method_index(
+            dexes,
+            dex_index,
+            target_method_idx,
+            arguments,
+            &engine,
+            budget,
+            1,
+        )
+    };
     let mut execution = engine.execute_with_budget(
         &code,
         &normalized_parameters,
@@ -464,8 +465,7 @@ fn execute_dex_method_index(
         });
     }
 
-    let (dex_index, method, signature) =
-        find_encoded_method(dexes, caller_dex_index, method_idx)?;
+    let (dex_index, method, signature) = find_encoded_method(dexes, caller_dex_index, method_idx)?;
     if method.access_flags & 0x8 == 0 {
         return Err(static_call_failed(
             method_idx,
@@ -510,18 +510,17 @@ fn execute_dex_method_index(
         .zip(parameters.iter().copied())
         .map(|(ty, value)| normalize_int_like(ty, value))
         .collect();
-    let mut resolver =
-        |child_method_idx: u32, arguments: &[i32], budget: &mut ExecutionBudget| {
-            execute_dex_method_index(
-                dexes,
-                dex_index,
-                child_method_idx,
-                arguments,
-                engine,
-                budget,
-                depth + 1,
-            )
-        };
+    let mut resolver = |child_method_idx: u32, arguments: &[i32], budget: &mut ExecutionBudget| {
+        execute_dex_method_index(
+            dexes,
+            dex_index,
+            child_method_idx,
+            arguments,
+            engine,
+            budget,
+            depth + 1,
+        )
+    };
     let report =
         engine.execute_with_budget(&code, &normalized_parameters, budget, Some(&mut resolver))?;
 
