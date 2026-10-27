@@ -412,14 +412,7 @@ pub fn execute_static_scalar_method_in_dex_set_at(
         .map(|(ty, value)| normalize_int_like(ty, value))
         .collect();
     let mut resolver = |target_method_idx: u32, arguments: &[i32], budget: &mut ExecutionBudget| {
-        execute_dex_method_index(
-            &context,
-            dex_index,
-            target_method_idx,
-            arguments,
-            budget,
-            1,
-        )
+        execute_dex_method_index(&context, dex_index, target_method_idx, arguments, budget, 1)
     };
     let mut execution = engine
         .execute_with_budget(
@@ -487,8 +480,12 @@ fn execute_dex_method_index(
         });
     }
 
-    let (dex_index, method, signature) =
-        match find_encoded_method(context.dexes, context.method_index, caller_dex_index, method_idx) {
+    let (dex_index, method, signature) = match find_encoded_method(
+        context.dexes,
+        context.method_index,
+        caller_dex_index,
+        method_idx,
+    ) {
             Ok(resolved) => resolved,
             Err(error) => {
                 // A small, explicit set of framework intrinsics can be modeled
@@ -564,7 +561,8 @@ fn execute_dex_method_index(
             depth + 1,
         )
     };
-    let report = context.engine
+    let report = context
+        .engine
         .execute_with_budget(&code, &normalized_parameters, budget, Some(&mut resolver))
         .map_err(|error| match error {
             EngineError::StaticCallFailed { method_idx, reason } => static_call_failed(
