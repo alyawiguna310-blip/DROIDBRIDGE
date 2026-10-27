@@ -62,6 +62,19 @@ fn run() -> Result<(), Box<dyn Error>> {
             &method_name,
             &parameters,
         )?,
+        CliCommand::DumpMethod {
+            apk,
+            dex_entry,
+            class_descriptor,
+            method_selector,
+            code_unit_offset,
+        } => dump_method(
+            &apk,
+            &dex_entry,
+            &class_descriptor,
+            &method_selector,
+            code_unit_offset,
+        )?,
         CliCommand::Launch {
             apk,
             package,
@@ -95,6 +108,13 @@ enum CliCommand {
         class_descriptor: String,
         method_name: String,
         parameters: Vec<i32>,
+    },
+    DumpMethod {
+        apk: PathBuf,
+        dex_entry: String,
+        class_descriptor: String,
+        method_selector: String,
+        code_unit_offset: Option<usize>,
     },
     Launch {
         apk: PathBuf,
@@ -159,6 +179,25 @@ where
                 parameters,
             })
         }
+        "dump-method" if (5..=6).contains(&arguments.len()) => {
+            let code_unit_offset = arguments
+                .get(5)
+                .map(|value| {
+                    let text = value
+                        .to_str()
+                        .ok_or_else(|| "code-unit offset must be valid UTF-8".to_owned())?;
+                    text.parse::<usize>()
+                        .map_err(|_| format!("invalid code-unit offset {text:?}"))
+                })
+                .transpose()?;
+            Ok(CliCommand::DumpMethod {
+                apk: PathBuf::from(&arguments[1]),
+                dex_entry: utf8_arg(&arguments, 2, "DEX entry")?,
+                class_descriptor: utf8_arg(&arguments, 3, "class descriptor")?,
+                method_selector: utf8_arg(&arguments, 4, "method selector")?,
+                code_unit_offset,
+            })
+        }
         "launch" if (3..=4).contains(&arguments.len()) => {
             let package = arguments[2]
                 .to_str()
@@ -192,6 +231,9 @@ where
         ),
         "run-method" => Err(
             "usage: droidbridge run-method <apk-path> <dex-entry> <class-descriptor> <method-name> [scalar-integer-argument ...]".to_owned()
+        ),
+        "dump-method" => Err(
+            "usage: droidbridge dump-method <apk-path> <dex-entry> <class-descriptor> <method-signature> [code-unit-offset]".to_owned()
         ),
         "launch" => {
             Err("usage: droidbridge launch <apk-path> <package-name> [profile-id]".to_owned())
@@ -556,6 +598,145 @@ fn print_status(backend: &dyn RuntimeBackend) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+
+/// Dump raw code units for one exact method signature without executing it.
+/// An optional code-unit offset resolves method/type/string operands for inspection.
+fn dump_method(
+    apk: &std::path::Path,
+    dex_entry: &str,
+    class_descriptor: &str,
+    method_selector: &str,
+    code_unit_offset: Option<usize>,
+) -> Result<(), Box<dyn Error>> {
+    let limits = ApkLimits::default();
+    let mut buffers = Vec::new();
+    let mut entry_names = Vec::new();
+    let dexes = load_dex_bundle_from_apk(apk, dex_entry, &limits, &mut buffers, &mut entry_names)?;
+    let root_dex_index = entry_names
+        .iter()
+        .position(|name| name == dex_entry)
+        .expect("requested DEX was validated and loaded");
+    let dex = &dexes[root_dex_index];
+    let mut found = false;
+
+    for class in dex.class_defs() {
+        if dex.type_descriptor(class.class_idx)? != class_descriptor {
+            continue;
+        }
+        let Some(data) = dex.class_data(class)? else {
+            continue;
+        };
+        for method in data
+            .direct_methods
+            .iter()
+            .chain(data.virtual_methods.iter())
+        {
+            let signature = dex.method_signature(method.method_idx)?;
+            let selector = format!(
+                "{}({}){}",
+                signature.name,
+                signature.parameter_types.join(""),
+                signature.return_type
+            );
+            if selector != method_selector {
+                continue;
+            }
+            found = true;
+            println!("method: {}->{}", class_descriptor, selector);
+            println!("access flags: 0x{:x}", method.access_flags);
+            if method.code_off == 0 {
+                println!("method has no code item");
+                continue;
+            }
+            let code = dex.code_item(method.code_off)?;
+            println!(
+                "registers: {}, inputs: {}, outputs: {}, code units: {}",
+                code.registers_size,
+                code.ins_size,
+                code.outs_size,
+                code.insns.len()
+            );
+            for (pc, word) in code.insns.iter().copied().enumerate() {
+                println!("  {pc:04}: 0x{word:04x}");
+            }
+
+            if let Some(pc) = code_unit_offset {
+                let Some(word) = code.insns.get(pc).copied() else {
+                    return Err(io::Error::other(format!(
+                        "code-unit offset {pc} is outside this method ({} code units)",
+                        code.insns.len()
+                    ))
+                    .into());
+                };
+                let opcode = (word & 0xff) as u8;
+                println!(
+                    "selected code unit {pc}: word 0x{word:04x}, opcode 0x{opcode:02x}"
+                );
+                if matches!(opcode, 0x6e..=0x72 | 0x74..=0x78) {
+                    if let (Some(method_idx), Some(packed)) =
+                        (code.insns.get(pc + 1), code.insns.get(pc + 2))
+                    {
+                        let method_idx = u32::from(*method_idx);
+                        let count = usize::from((word >> 12) & 0x0f);
+                        let registers = [
+                            usize::from((word >> 8) & 0x0f),
+                            usize::from(packed & 0x000f),
+                            usize::from((packed >> 4) & 0x000f),
+                            usize::from((packed >> 8) & 0x000f),
+                            usize::from((packed >> 12) & 0x000f),
+                        ];
+                        println!("invoke argument-word count: {count}");
+                        if count <= registers.len() {
+                            println!("invoke register list: {:?}", &registers[..count]);
+                        } else {
+                            println!("invoke has invalid argument-word count {count}");
+                        }
+                        match dex.method_signature(method_idx) {
+                            Ok(target) => println!(
+                                "invoke target: {}->{}({}){} [method index {method_idx}]",
+                                target.class_descriptor,
+                                target.name,
+                                target.parameter_types.join(""),
+                                target.return_type
+                            ),
+                            Err(error) => println!(
+                                "invoke target method index {method_idx} is invalid: {error}"
+                            ),
+                        }
+                    } else {
+                        println!("truncated invoke instruction at selected code unit");
+                    }
+                } else if opcode == 0x1a {
+                    if let Some(string_idx) = code.insns.get(pc + 1).copied() {
+                        match dex.string(u32::from(string_idx)) {
+                            Ok(value) => println!("const-string literal: {value:?}"),
+                            Err(error) => println!("const-string index is invalid: {error}"),
+                        }
+                    }
+                } else if opcode == 0x1b {
+                    if let (Some(low), Some(high)) =
+                        (code.insns.get(pc + 1), code.insns.get(pc + 2))
+                    {
+                        let string_idx = u32::from(*low) | (u32::from(*high) << 16);
+                        match dex.string(string_idx) {
+                            Ok(value) => println!("const-string/jumbo literal: {value:?}"),
+                            Err(error) => println!("const-string/jumbo index is invalid: {error}"),
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if !found {
+        return Err(io::Error::other(format!(
+            "method signature {method_selector:?} was not found in {class_descriptor} within {dex_entry}"
+        ))
+        .into());
+    }
+    Ok(())
+}
+
 fn launch_apk(apk: PathBuf, package: String, profile: String) -> Result<(), Box<dyn Error>> {
     let request = LaunchRequest::new(apk, package, profile)?;
     let backend = WaydroidBackend::default();
@@ -685,6 +866,47 @@ mod tests {
                 class_descriptor: None,
             })
         );
+    }
+
+    #[test]
+    fn parses_dump_method_with_optional_code_unit_offset() {
+        assert_eq!(
+            parse_command(args(&[
+                "dump-method",
+                "app.apk",
+                "classes.dex",
+                "Landroidx/fragment/app/i1;",
+                "b(I)I",
+                "19"
+            ])),
+            Ok(CliCommand::DumpMethod {
+                apk: PathBuf::from("app.apk"),
+                dex_entry: "classes.dex".to_owned(),
+                class_descriptor: "Landroidx/fragment/app/i1;".to_owned(),
+                method_selector: "b(I)I".to_owned(),
+                code_unit_offset: Some(19),
+            })
+        );
+        assert_eq!(
+            parse_command(args(&[
+                "dump-method",
+                "app.apk",
+                "classes.dex",
+                "Landroidx/fragment/app/i1;",
+                "b(I)I"
+            ])),
+            Ok(CliCommand::DumpMethod {
+                apk: PathBuf::from("app.apk"),
+                dex_entry: "classes.dex".to_owned(),
+                class_descriptor: "Landroidx/fragment/app/i1;".to_owned(),
+                method_selector: "b(I)I".to_owned(),
+                code_unit_offset: None,
+            })
+        );
+        assert!(parse_command(args(&[
+            "dump-method", "app.apk", "classes.dex", "LTest;", "answer()I", "not-a-pc"
+        ]))
+        .is_err());
     }
 
     #[test]
