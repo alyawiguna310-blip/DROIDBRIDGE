@@ -284,7 +284,10 @@ pub fn execute_static_integer_method(
     }
     let code = dex.code_item(method.code_off)?;
     let execution = IntegerDexEngine::default().execute(&code, parameters)?;
-    Ok(MethodExecutionReport { signature, execution })
+    Ok(MethodExecutionReport {
+        signature,
+        execution,
+    })
 }
 
 fn same_name_signature_label(class_descriptor: &str, method_name: &str, arity: usize) -> String {
@@ -1039,5 +1042,4 @@ mod tests {
             Err(MethodExecutionError::MethodNotFound { .. })
         ));
     }
-
 }
