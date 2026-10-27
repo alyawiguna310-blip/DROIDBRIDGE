@@ -99,7 +99,6 @@ impl ReadBudget {
     }
 }
 
-#[derive(Debug)]
 pub(crate) struct ApkArchive<R: Read + Seek> {
     zip: ZipArchive<R>,
     entries: Vec<EntryInfo>,
@@ -593,7 +592,10 @@ mod tests {
     }
 
     fn open_err(bytes: &[u8], max_entries: usize) -> ApkError {
-        open(bytes, max_entries).expect_err("archive should be rejected")
+        match open(bytes, max_entries) {
+            Err(error) => error,
+            Ok(_) => panic!("archive should have been rejected"),
+        }
     }
 
     fn names<R: Read + Seek>(archive: &ApkArchive<R>) -> Vec<&str> {
