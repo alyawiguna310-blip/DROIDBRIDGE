@@ -1612,8 +1612,8 @@ mod tests {
                 registers: 2,
                 ins: 1,
                 outs: 0,
-                // const/4 v0, 1; return v0
-                insns: vec![0x1012, 0x000f],
+                // return the boolean input in v1; it is normalized at method entry.
+                insns: vec![0x010f],
             },
             TestMethod {
                 name: "asByte",
@@ -1649,32 +1649,39 @@ mod tests {
             DexFile::parse(&bytes, &crate::dex::DexLimits::default()).expect("parse synthetic DEX");
 
         let candidates =
-            list_static_integer_methods(&dex, Some(TEST_CLASS)).expect("list scalar candidates");
+            list_static_scalar_methods(&dex, Some(TEST_CLASS)).expect("list scalar candidates");
         assert_eq!(candidates.len(), 4);
 
         assert_eq!(
-            execute_static_integer_method(&dex, TEST_CLASS, "truthy", &[42])
+            execute_static_scalar_method(&dex, TEST_CLASS, "truthy", &[42])
                 .expect("execute boolean")
                 .execution
                 .return_value,
             EngineReturn::Int(1)
         );
         assert_eq!(
-            execute_static_integer_method(&dex, TEST_CLASS, "asByte", &[])
+            execute_static_scalar_method(&dex, TEST_CLASS, "truthy", &[0])
+                .expect("execute false boolean")
+                .execution
+                .return_value,
+            EngineReturn::Int(0)
+        );
+        assert_eq!(
+            execute_static_scalar_method(&dex, TEST_CLASS, "asByte", &[])
                 .expect("execute byte")
                 .execution
                 .return_value,
             EngineReturn::Int(-1)
         );
         assert_eq!(
-            execute_static_integer_method(&dex, TEST_CLASS, "asChar", &[])
+            execute_static_scalar_method(&dex, TEST_CLASS, "asChar", &[])
                 .expect("execute char")
                 .execution
                 .return_value,
             EngineReturn::Int(65_535)
         );
         assert_eq!(
-            execute_static_integer_method(&dex, TEST_CLASS, "asShort", &[])
+            execute_static_scalar_method(&dex, TEST_CLASS, "asShort", &[])
                 .expect("execute short")
                 .execution
                 .return_value,
