@@ -2152,7 +2152,7 @@ mod tests {
     #[test]
     fn rejects_division_by_zero() {
         // const/4 v0, 1; const/4 v1, 0; div-int v2, v0, v1
-        let method = code(3, 0, &[0x1012, 0x0012, 0x0293, 0x0100, 0x020f]);
+        let method = code(3, 0, &[0x1012, 0x0112, 0x0293, 0x0100, 0x020f]);
         assert_eq!(
             run(&method, &[]),
             Err(EngineError::DivisionByZero { pc: 2 })
