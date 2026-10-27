@@ -555,8 +555,7 @@ fn find_encoded_method(
 
     // Prefer the caller's own DEX, then search the remaining APK DEX files.
     let candidates = std::iter::once(caller_dex_index)
-        .chain(0..dexes.len())
-        .filter(|candidate| *candidate != caller_dex_index);
+        .chain((0..dexes.len()).filter(|candidate| *candidate != caller_dex_index));
     for dex_index in candidates {
         let dex = &dexes[dex_index];
         for class in dex.class_defs() {
