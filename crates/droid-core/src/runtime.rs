@@ -1,12 +1,14 @@
-//! Contracts for adapters that connect DROIDBRIDGE to an Android runtime.
+//! Runtime contracts and the first project-owned execution engine.
 //!
-//! This module defines an interface only. It does not install, start, or emulate
-//! Android; a concrete backend must implement the contract before an APK can run.
+//! The engine submodule interprets a limited integer-only DEX instruction set.
+//! The Waydroid submodule is a separate adapter to an external Android runtime.
+//! Neither component currently provides complete Android application compatibility.
 
 use crate::profile::validate_profile_id;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+pub mod engine;
 pub mod waydroid;
 
 /// Whether a backend capability has been verified for the current host.
