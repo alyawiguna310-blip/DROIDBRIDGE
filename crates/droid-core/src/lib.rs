@@ -1,8 +1,8 @@
 //! Shared, host-independent configuration types for DROIDBRIDGE.
 //!
 //! This crate does not launch APKs end-to-end or spoof hardware directly.
-//! It includes an experimental bounded DEX interpreter for a small integer-only
-//! instruction subset, but does not yet provide the full Android runtime.
+//! It includes an experimental bounded DEX interpreter for scalar integer-like
+//! instructions and constrained same-DEX calls, but not the full Android runtime.
 //! Configurable Android-facing properties stay separate from detected host
 //! capabilities so profiles cannot silently imply unsupported host features.
 //!
@@ -36,7 +36,7 @@ pub use registry::ProfileRegistry;
 pub use runtime::engine::{
     EngineError, EngineLimits, EngineReturn, ExecutionReport, IntegerDexEngine,
     MethodExecutionError, MethodExecutionReport, execute_static_integer_method,
-    list_static_integer_methods,
+    execute_static_scalar_method, list_static_integer_methods, list_static_scalar_methods,
 };
 pub use runtime::waydroid::WaydroidBackend;
 pub use runtime::{
