@@ -414,16 +414,22 @@ impl<'dexes, 'data> DexSetExecutor<'dexes, 'data> {
             })
             .collect();
         if supported.is_empty() {
-            let signature = same_name_signature_label(class_descriptor, method_name, parameters.len());
+            let signature =
+                same_name_signature_label(class_descriptor, method_name, parameters.len());
             return Err(MethodExecutionError::UnsupportedSignature { signature });
         }
         if supported.len() > 1 {
             return Err(MethodExecutionError::AmbiguousMethod {
-                signature: same_name_signature_label(class_descriptor, method_name, parameters.len()),
+                signature: same_name_signature_label(
+                    class_descriptor,
+                    method_name,
+                    parameters.len(),
+                ),
             });
         }
 
-        let (dex_index, method, signature) = supported.into_iter().next().expect("one supported match");
+        let (dex_index, method, signature) =
+            supported.into_iter().next().expect("one supported match");
         if method.code_off == 0 {
             return Err(MethodExecutionError::MethodHasNoCode {
                 signature: method_signature_label(&signature),
@@ -446,7 +452,9 @@ impl<'dexes, 'data> DexSetExecutor<'dexes, 'data> {
             .zip(parameters.iter().copied())
             .map(|(ty, value)| normalize_int_like(ty, value))
             .collect();
-        let mut resolver = |target_method_idx: u32, arguments: &[i32], budget: &mut ExecutionBudget| {
+        let mut resolver = |target_method_idx: u32,
+                            arguments: &[i32],
+                            budget: &mut ExecutionBudget| {
             execute_dex_method_index(&context, dex_index, target_method_idx, arguments, budget, 1)
         };
         let mut execution = engine
