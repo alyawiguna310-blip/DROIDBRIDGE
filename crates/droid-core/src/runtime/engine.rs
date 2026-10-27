@@ -465,7 +465,24 @@ fn execute_dex_method_index(
         });
     }
 
-    let (dex_index, method, signature) = find_encoded_method(dexes, caller_dex_index, method_idx)?;
+    let (dex_index, method, signature) =
+        match find_encoded_method(dexes, caller_dex_index, method_idx) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                // A small, explicit set of framework intrinsics can be modeled
+                // without pretending that the Android framework itself is loaded.
+                let caller_dex = dexes.get(caller_dex_index).ok_or_else(|| {
+                    static_call_failed(method_idx, "caller DEX index is outside the loaded DEX set")
+                })?;
+                let signature = caller_dex
+                    .method_signature(method_idx)
+                    .map_err(|metadata_error| static_call_failed(method_idx, metadata_error))?;
+                if let Some(value) = api30_window_insets_type_intrinsic(&signature, parameters) {
+                    return Ok(EngineReturn::Int(value));
+                }
+                return Err(error);
+            }
+        };
     if method.access_flags & 0x8 == 0 {
         return Err(static_call_failed(
             method_idx,
@@ -543,6 +560,35 @@ fn execute_dex_method_index(
             "method is declared void but executed an integer return",
         )),
         _ => unreachable!("only scalar and void signatures passed validation"),
+    }
+}
+
+/// Return deterministic values for a narrow set of Android API 30+
+/// WindowInsets.Type intrinsics. These methods return stable bit masks; this
+/// is not a general Android framework emulator, and environment-dependent APIs
+/// such as SdkExtensions.getExtensionVersion deliberately remain unsupported.
+fn api30_window_insets_type_intrinsic(
+    signature: &MethodSignature,
+    parameters: &[i32],
+) -> Option<i32> {
+    if signature.class_descriptor != "Landroid/view/WindowInsets$Type;"
+        || signature.return_type != "I"
+        || !signature.parameter_types.is_empty()
+        || !parameters.is_empty()
+    {
+        return None;
+    }
+
+    match signature.name.as_str() {
+        "statusBars" => Some(1 << 0),
+        "navigationBars" => Some(1 << 1),
+        "captionBar" => Some(1 << 2),
+        "ime" => Some(1 << 3),
+        "systemGestures" => Some(1 << 4),
+        "mandatorySystemGestures" => Some(1 << 5),
+        "tappableElement" => Some(1 << 6),
+        "displayCutout" => Some(1 << 7),
+        _ => None,
     }
 }
 
@@ -1706,6 +1752,55 @@ mod tests {
         assert_eq!(
             engine.execute_with_budget(&caller, &[19, 23], &mut budget, Some(&mut resolver)),
             Err(EngineError::InstructionStepLimitExceeded { max: 4 })
+        );
+    }
+
+    #[test]
+    fn models_api30_window_insets_type_constants_only_for_exact_signatures() {
+        let class_descriptor = "Landroid/view/WindowInsets$Type;";
+        for (name, expected) in [
+            ("statusBars", 1),
+            ("navigationBars", 2),
+            ("captionBar", 4),
+            ("ime", 8),
+            ("systemGestures", 16),
+            ("mandatorySystemGestures", 32),
+            ("tappableElement", 64),
+            ("displayCutout", 128),
+        ] {
+            let signature = MethodSignature {
+                class_descriptor: class_descriptor.to_owned(),
+                name: name.to_owned(),
+                parameter_types: Vec::new(),
+                return_type: "I".to_owned(),
+            };
+            assert_eq!(
+                api30_window_insets_type_intrinsic(&signature, &[]),
+                Some(expected),
+                "{name}"
+            );
+        }
+
+        let extension_signature = MethodSignature {
+            class_descriptor: "Landroid/os/ext/SdkExtensions;".to_owned(),
+            name: "getExtensionVersion".to_owned(),
+            parameter_types: vec!["I".to_owned()],
+            return_type: "I".to_owned(),
+        };
+        assert_eq!(
+            api30_window_insets_type_intrinsic(&extension_signature, &[0]),
+            None
+        );
+
+        let wrong_arity = MethodSignature {
+            class_descriptor: class_descriptor.to_owned(),
+            name: "statusBars".to_owned(),
+            parameter_types: vec!["I".to_owned()],
+            return_type: "I".to_owned(),
+        };
+        assert_eq!(
+            api30_window_insets_type_intrinsic(&wrong_arity, &[0]),
+            None
         );
     }
 
