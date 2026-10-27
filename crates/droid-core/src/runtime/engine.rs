@@ -2119,6 +2119,46 @@ mod tests {
         );
     }
     #[test]
+    fn resolves_symbolic_object_return_from_static_callee() {
+        // makeObject creates an opaque reference token; isNonNull receives it
+        // through move-result-object and branches on it without dereferencing it.
+        let bytes = build_dex(&[
+            TestMethod {
+                name: "makeObject",
+                return_type: "Ljava/lang/Object;",
+                params: vec![],
+                registers: 1,
+                ins: 0,
+                outs: 0,
+                // new-instance v0, type@1; return-object v0
+                insns: vec![0x0022, 0x0001, 0x0011],
+            },
+            TestMethod {
+                name: "isNonNull",
+                return_type: "I",
+                params: vec![],
+                registers: 1,
+                ins: 0,
+                outs: 0,
+                // invoke-static {}, method@0; move-result-object v0;
+                // if-eqz v0, +4; const/4 v0, 1; return v0;
+                // const/4 v0, 0; return v0
+                insns: vec![
+                    0x0071, 0x0000, 0x0000, 0x000c, 0x0038, 0x0004, 0x1012, 0x000f, 0x0012,
+                    0x000f,
+                ],
+            },
+        ]);
+        let dex =
+            DexFile::parse(&bytes, &crate::dex::DexLimits::default()).expect("parse synthetic DEX");
+
+        let report = execute_static_scalar_method(&dex, TEST_CLASS, "isNonNull", &[])
+            .expect("execute static caller that receives a symbolic object reference");
+
+        assert_eq!(report.execution.return_value, EngineReturn::Int(1));
+    }
+
+    #[test]
     fn resolves_and_executes_an_integer_method_from_real_dex_metadata() {
         let bytes = build_dex(&[TestMethod {
             name: "sum",
