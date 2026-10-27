@@ -7,7 +7,7 @@
 
 The shared core is intended to manage APK metadata, portable device profiles, runtime backends, and performance settings. The long-term goal is to run Android apps and games in host-integrated windows while using the host machine's actual CPU and GPU.
 
-> **Status: early scaffold.** This repository still has not demonstrated launching a real Android APK. It can inspect APKs without executing them and now includes a first Linux Waydroid CLI adapter. The adapter is covered with a mocked-command test, but live Waydroid installation, graphics, and real-app execution have not yet been validated. Android framework compatibility, ART, ARM translation, and Google Play support remain separate milestones.
+> **Status: early scaffold.** This repository still has not demonstrated launching a real Android APK. It can inspect APKs without executing them, includes a Linux Waydroid CLI adapter, and provides a verified-launch preflight that checks the manifest package and backend readiness/capabilities before delegating to the adapter. The adapter is covered with a mocked-command test, but live Waydroid installation, graphics, and real-app execution have not yet been validated. Android framework compatibility, ART, ARM translation, and Google Play support remain separate milestones.
 
 ## Initial configuration
 
@@ -27,6 +27,7 @@ Device identity profiles must not claim unsupported CPU instructions or GPU capa
   - `registry` — `ProfileRegistry` for loading, lookup, and active-profile selection.
   - `errors` — typed errors (`ProfileError`, `ConfigError`, `RegistryError`, `ProfileIdError`).
   - `runtime` — runtime-backend trait and an initial Linux `WaydroidBackend` for readiness probing, APK installation/launch, process polling, and force-stop; integration with a live Waydroid installation is still unverified.
+  - `launcher` — APK inspection and exact package matching before a runtime backend is allowed to launch.
   - `dex` — bounds-checked DEX parser (no execution).
   - `apk` — APK inspection: ZIP reader with limits, Android binary manifest parser, DEX discovery.
 - `profiles/POCO_F6.json` — example portable profile.
@@ -86,6 +87,12 @@ See `docs/architecture.md` for the full list of supported fields and known limit
 The `runtime` module is the seam between the portable core and a separately provisioned Android runtime. It defines backend identity, capability declarations, readiness probing, a validated launch request, and a session handle for observing/stopping a running app. Capabilities default to `Unknown` so a backend must not claim ARM64 execution or graphics support without verification.
 
 This contract is not an emulator. The initial `WaydroidBackend` calls the documented Waydroid CLI for status, APK installation, package launch, process polling, and force-stop. Waydroid itself must already be installed, initialized, and running; the adapter does not initialize it, start its session, inspect the APK manifest, verify the requested package matches the APK, or apply the selected device-profile identity. A successful command does not prove that an arbitrary APK is compatible. The adapter has mocked-command coverage, but still needs a live Waydroid test with a harmless test APK.
+
+## Verified APK launch preflight
+
+The public `launch_verified_apk` function checks an APK using the configured `ApkLimits`, requires the manifest package to match the requested package exactly, checks that the backend reports `Ready`, and requires explicit support for both APK installation and package launch before invoking the backend. The returned result includes the inspection report and runtime session.
+
+This preflight prevents accidental package/APK mismatches and avoids installing an APK when the backend is not ready or has not confirmed the required operations. It does not prove that the app is compatible, safe to execute, or able to render; actual launch and graphics validation on a live Waydroid system are still pending.
 
 ## Development
 
