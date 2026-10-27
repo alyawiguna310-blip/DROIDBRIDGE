@@ -7,8 +7,7 @@
 
 use crate::apk::{ApkError, ApkLimits, ApkReport, inspect_file};
 use crate::runtime::{
-    BackendStatus, CapabilitySupport, LaunchRequest, RuntimeBackend, RuntimeError,
-    RuntimeSession,
+    BackendStatus, CapabilitySupport, LaunchRequest, RuntimeBackend, RuntimeError, RuntimeSession,
 };
 use std::error::Error;
 use std::fmt;
@@ -272,10 +271,7 @@ mod tests {
             Ok(self.status.clone())
         }
 
-        fn launch(
-            &self,
-            request: &LaunchRequest,
-        ) -> Result<Box<dyn RuntimeSession>, RuntimeError> {
+        fn launch(&self, request: &LaunchRequest) -> Result<Box<dyn RuntimeSession>, RuntimeError> {
             self.launch_calls.fetch_add(1, Ordering::Relaxed);
             Ok(Box::new(MockSession {
                 package_name: request.package_name().to_owned(),
@@ -297,9 +293,7 @@ mod tests {
         LaunchRequest::new(path, package, "POCO_F6").expect("valid request")
     }
 
-    fn expect_error(
-        result: Result<VerifiedLaunch, VerifiedLaunchError>,
-    ) -> VerifiedLaunchError {
+    fn expect_error(result: Result<VerifiedLaunch, VerifiedLaunchError>) -> VerifiedLaunchError {
         match result {
             Err(error) => error,
             Ok(_) => panic!("expected verified launch to fail"),
@@ -397,7 +391,9 @@ mod tests {
                 &request(apk.path.clone(), "com.example.app"),
                 &ApkLimits::default(),
             ),
-            Err(VerifiedLaunchError::ApkInspection(ApkError::InvalidArchive { .. }))
+            Err(VerifiedLaunchError::ApkInspection(
+                ApkError::InvalidArchive { .. }
+            ))
         ));
         assert_eq!(backend.launch_calls.load(Ordering::Relaxed), 0);
     }
