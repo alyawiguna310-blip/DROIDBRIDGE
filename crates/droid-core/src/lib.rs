@@ -26,7 +26,7 @@ pub mod runtime;
 pub use config::{BridgeConfig, GoogleServicesMode, PerformancePreset};
 pub use errors::{ConfigError, ProfileError, ProfileIdError, RegistryError};
 pub use launcher::{
-    launch_verified_apk, RequiredRuntimeCapability, VerifiedLaunch, VerifiedLaunchError,
+    RequiredRuntimeCapability, VerifiedLaunch, VerifiedLaunchError, launch_verified_apk,
 };
 pub use profile::{DeviceProfile, MAX_PROFILE_ID_LEN, validate_profile_id};
 pub use registry::ProfileRegistry;
