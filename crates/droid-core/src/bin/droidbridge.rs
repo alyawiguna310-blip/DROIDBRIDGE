@@ -679,19 +679,26 @@ fn dump_method(
                         (code.insns.get(pc + 1), code.insns.get(pc + 2))
                     {
                         let method_idx = u32::from(*method_idx);
-                        let count = usize::from((word >> 12) & 0x0f);
-                        let registers = [
-                            usize::from((word >> 8) & 0x0f),
-                            usize::from(packed & 0x000f),
-                            usize::from((packed >> 4) & 0x000f),
-                            usize::from((packed >> 8) & 0x000f),
-                            usize::from((packed >> 12) & 0x000f),
-                        ];
-                        println!("invoke argument-word count: {count}");
-                        if count <= registers.len() {
-                            println!("invoke register list: {:?}", &registers[..count]);
+                        if (0x74..=0x78).contains(&opcode) {
+                            let count = usize::from((word >> 8) & 0x00ff);
+                            let first_register = usize::from(*packed);
+                            println!("invoke/range argument-word count: {count}");
+                            println!("invoke/range first register: v{first_register}");
                         } else {
-                            println!("invoke has invalid argument-word count {count}");
+                            let count = usize::from((word >> 12) & 0x0f);
+                            let registers = [
+                                usize::from((word >> 8) & 0x0f),
+                                usize::from(packed & 0x000f),
+                                usize::from((packed >> 4) & 0x000f),
+                                usize::from((packed >> 8) & 0x000f),
+                                usize::from((packed >> 12) & 0x000f),
+                            ];
+                            println!("invoke argument-word count: {count}");
+                            if count <= registers.len() {
+                                println!("invoke register list: {:?}", &registers[..count]);
+                            } else {
+                                println!("invoke has invalid argument-word count {count}");
+                            }
                         }
                         match dex.method_signature(method_idx) {
                             Ok(target) => println!(
