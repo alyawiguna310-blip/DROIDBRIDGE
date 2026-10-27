@@ -8,9 +8,9 @@
 //! arrays, exceptions, Android framework APIs, native libraries, and graphics remain
 //! unsupported.
 //!
-//! The input is a parsed CodeItem. It must have no try/catch table and must
-//! use only instructions listed in IntegerDexEngine's implementation.
-//! Unsupported instructions are rejected before execution.
+//! The input is a parsed CodeItem without try/catch tables. Instruction widths
+//! and branch targets are validated before execution. Unknown opcodes are rejected
+//! during decoding; known-width but unsupported instructions are refused if reached.
 
 use crate::dex::{CodeItem, DexError, DexFile, EncodedMethod, MethodSignature};
 use std::collections::HashMap;
@@ -1107,9 +1107,9 @@ impl IntegerDexEngine {
 
     /// Execute a parsed DEX code item with 32-bit integer parameters.
     ///
-    /// Instructions are decoded and branch targets are checked before any
-    /// register code runs. The step limit bounds loops. A method that uses an
-    /// unsupported instruction is rejected rather than partially interpreted.
+    /// Instruction widths and branch targets are checked before any register code runs.
+    /// The step limit bounds loops. Unknown opcodes are rejected during decoding;
+    /// known-width but unsupported instructions are refused if execution reaches them.
     pub fn execute(
         &self,
         code: &CodeItem,
@@ -1631,6 +1631,7 @@ fn decode_program(
             | 0x0f
             | 0x11
             | 0x12
+            | 0x27
             | 0x28
             | 0x7b..=0x7c
             | 0x8d..=0x8f
@@ -1647,6 +1648,7 @@ fn decode_program(
             | 0x90..=0x9a
             | 0xd0..=0xe2 => 2,
             0x03 | 0x09 | 0x14 | 0x1b | 0x2a => 3,
+            0x70 | 0x76 => 3,
             0x71 | 0x77 if allow_static_calls => 3,
             _ => return Err(EngineError::UnsupportedOpcode { pc, opcode }),
         };
@@ -2029,6 +2031,26 @@ mod tests {
 
     fn run(code: &CodeItem, parameters: &[i32]) -> Result<ExecutionReport, EngineError> {
         IntegerDexEngine::default().execute(code, parameters)
+    }
+
+    #[test]
+    fn branches_over_decodable_but_unsupported_instructions() {
+        // if-eqz v0, +6; invoke-direct {}; throw v0; return v0
+        // The unimplemented invoke/throw must not block a valid branch around them.
+        let method = code(1, 0, &[0x0038, 6, 0x0070, 0, 0, 0x0027, 0x000f]);
+        assert_eq!(
+            run(&method, &[]).unwrap().return_value,
+            EngineReturn::Int(0)
+        );
+    }
+
+    #[test]
+    fn refuses_decodable_but_unsupported_invoke_direct_when_reached() {
+        let method = code(1, 0, &[0x0070, 0, 0, 0x000e]);
+        assert_eq!(
+            run(&method, &[]),
+            Err(EngineError::UnsupportedOpcode { pc: 0, opcode: 0x70 })
+        );
     }
 
     #[test]
