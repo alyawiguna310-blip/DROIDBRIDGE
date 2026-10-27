@@ -1250,7 +1250,9 @@ impl IntegerDexEngine {
                             dex_index,
                             type_idx,
                         },
-                        RegisterValue::Uninitialized | RegisterValue::Zero | RegisterValue::Int(_) => {
+                        RegisterValue::Uninitialized
+                        | RegisterValue::Zero
+                        | RegisterValue::Int(_) => {
                             unreachable!("object read validates register type")
                         }
                     };
@@ -1778,11 +1780,7 @@ fn compare_zero(opcode: u8, value: i32) -> bool {
     }
 }
 
-fn ensure_initialized(
-    value: RegisterValue,
-    register: usize,
-    pc: usize,
-) -> Result<(), EngineError> {
+fn ensure_initialized(value: RegisterValue, register: usize, pc: usize) -> Result<(), EngineError> {
     if matches!(value, RegisterValue::Uninitialized) {
         Err(EngineError::UninitializedRegister { pc, register })
     } else {
@@ -1829,8 +1827,7 @@ fn compare_register_values(
             || (left_is_reference && right_is_reference)
         {
             let left_is_null = matches!(left, RegisterValue::NullReference | RegisterValue::Zero);
-            let right_is_null =
-                matches!(right, RegisterValue::NullReference | RegisterValue::Zero);
+            let right_is_null = matches!(right, RegisterValue::NullReference | RegisterValue::Zero);
             match (left_is_null, right_is_null) {
                 (true, true) => true,
                 (false, false) => match (left, right) {
