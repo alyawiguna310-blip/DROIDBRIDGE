@@ -445,12 +445,8 @@ fn execute_dex_method_index(
     let mut resolver = |child_method_idx: u32, arguments: &[i32], budget: &mut ExecutionBudget| {
         execute_dex_method_index(dex, child_method_idx, arguments, engine, budget, depth + 1)
     };
-    let report = engine.execute_with_budget(
-        &code,
-        &normalized_parameters,
-        budget,
-        Some(&mut resolver),
-    )?;
+    let report =
+        engine.execute_with_budget(&code, &normalized_parameters, budget, Some(&mut resolver))?;
 
     match (signature.return_type.as_str(), report.return_value) {
         ("I" | "Z" | "B" | "S" | "C", EngineReturn::Int(value)) => Ok(EngineReturn::Int(
