@@ -627,8 +627,7 @@ struct DexMethodIndex {
 
 impl DexMethodIndex {
     fn build(dexes: &[DexFile<'_>]) -> Result<Self, DexError> {
-        let mut definitions: HashMap<MethodSignature, Vec<(usize, EncodedMethod)>> =
-            HashMap::new();
+        let mut definitions: HashMap<MethodSignature, Vec<(usize, EncodedMethod)>> = HashMap::new();
         for (dex_index, dex) in dexes.iter().enumerate() {
             for class in dex.class_defs() {
                 let Some(data) = dex.class_data(class)? else {
@@ -676,9 +675,9 @@ fn find_encoded_method(
 
     // Retain the old resolution order: executable definition in the caller's
     // DEX first, then the first executable matching definition from the bundle.
-    let local = declarations.iter().find(|(dex_index, method)| {
-        *dex_index == caller_dex_index && method.code_off != 0
-    });
+    let local = declarations
+        .iter()
+        .find(|(dex_index, method)| *dex_index == caller_dex_index && method.code_off != 0);
     let selected = local.or_else(|| {
         declarations
             .iter()
