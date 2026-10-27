@@ -50,8 +50,14 @@ impl IfCondition {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Instruction {
     Nop,
-    Move { dest: u16, src: u16 },
-    Const { dest: u16, value: i32 },
+    Move {
+        dest: u16,
+        src: u16,
+    },
+    Const {
+        dest: u16,
+        value: i32,
+    },
     Binary {
         op: IntegerBinaryOp,
         dest: u16,
@@ -59,8 +65,12 @@ pub enum Instruction {
         rhs: u16,
     },
     ReturnVoid,
-    Return { src: u16 },
-    Goto { relative_offset: i32 },
+    Return {
+        src: u16,
+    },
+    Goto {
+        relative_offset: i32,
+    },
     If {
         condition: IfCondition,
         lhs: u16,
@@ -125,32 +135,64 @@ pub enum DexExecutionError {
 impl fmt::Display for DexExecutionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidOffset { offset, instruction_count } => {
-                write!(f, "instruction offset {offset} is outside {instruction_count} code units")
+            Self::InvalidOffset {
+                offset,
+                instruction_count,
+            } => {
+                write!(
+                    f,
+                    "instruction offset {offset} is outside {instruction_count} code units"
+                )
             }
-            Self::TruncatedInstruction { offset, expected_units, available_units } => write!(
+            Self::TruncatedInstruction {
+                offset,
+                expected_units,
+                available_units,
+            } => write!(
                 f,
                 "instruction at code unit {offset} needs {expected_units} code units but only {available_units} remain"
             ),
             Self::UnsupportedOpcode { offset, opcode } => {
-                write!(f, "unsupported DEX opcode/data marker {opcode:#04x} at code unit {offset}")
+                write!(
+                    f,
+                    "unsupported DEX opcode/data marker {opcode:#04x} at code unit {offset}"
+                )
             }
-            Self::InvalidRegister { offset, register, register_count } => write!(
+            Self::InvalidRegister {
+                offset,
+                register,
+                register_count,
+            } => write!(
                 f,
                 "register v{register} at code unit {offset} is outside register file of size {register_count}"
             ),
             Self::ArgumentCountMismatch { expected, actual } => {
-                write!(f, "method expects {expected} input registers but received {actual} values")
+                write!(
+                    f,
+                    "method expects {expected} input registers but received {actual} values"
+                )
             }
-            Self::CodeTooLarge { code_units, max_code_units } => write!(
+            Self::CodeTooLarge {
+                code_units,
+                max_code_units,
+            } => write!(
                 f,
                 "method has {code_units} code units, exceeding the interpreter limit of {max_code_units}"
             ),
-            Self::InvalidCodeItem(reason) => write!(f, "invalid code item for integer execution: {reason}"),
-            Self::UnsupportedTryCatch => {
-                write!(f, "integer interpreter refuses code items with try/catch tables")
+            Self::InvalidCodeItem(reason) => {
+                write!(f, "invalid code item for integer execution: {reason}")
             }
-            Self::InvalidBranchTarget { offset, target, instruction_count } => write!(
+            Self::UnsupportedTryCatch => {
+                write!(
+                    f,
+                    "integer interpreter refuses code items with try/catch tables"
+                )
+            }
+            Self::InvalidBranchTarget {
+                offset,
+                target,
+                instruction_count,
+            } => write!(
                 f,
                 "branch at code unit {offset} targets invalid code unit {target} (stream length {instruction_count})"
             ),
@@ -158,7 +200,10 @@ impl fmt::Display for DexExecutionError {
                 write!(f, "integer division by zero at code unit {offset}")
             }
             Self::StepLimitExceeded { max_steps } => {
-                write!(f, "DEX execution exceeded the {max_steps}-instruction step limit")
+                write!(
+                    f,
+                    "DEX execution exceeded the {max_steps}-instruction step limit"
+                )
             }
             Self::MissingReturn => write!(f, "DEX instruction stream ended without a return"),
         }
@@ -224,11 +269,20 @@ pub fn decode_instruction(
             )
         }
         0x0e => (1, Instruction::ReturnVoid),
-        0x0f => (1, Instruction::Return { src: u16::from(high_byte) }),
+        0x0f => (
+            1,
+            Instruction::Return {
+                src: u16::from(high_byte),
+            },
+        ),
         0x12 => {
             let dest = (word >> 8) & 0x0f;
             let nibble = i32::from((word >> 12) & 0x0f);
-            let value = if nibble & 0x08 != 0 { nibble - 16 } else { nibble };
+            let value = if nibble & 0x08 != 0 {
+                nibble - 16
+            } else {
+                nibble
+            };
             (1, Instruction::Const { dest, value })
         }
         0x13 => {
@@ -245,8 +299,7 @@ pub fn decode_instruction(
         0x14 => {
             let width = 3;
             require_units(insns, offset, width)?;
-            let value = u32::from(insns[offset + 1])
-                | (u32::from(insns[offset + 2]) << 16);
+            let value = u32::from(insns[offset + 1]) | (u32::from(insns[offset + 2]) << 16);
             (
                 width,
                 Instruction::Const {
@@ -272,8 +325,8 @@ pub fn decode_instruction(
         0x2a => {
             let width = 3;
             require_units(insns, offset, width)?;
-            let relative_offset = u32::from(insns[offset + 1])
-                | (u32::from(insns[offset + 2]) << 16);
+            let relative_offset =
+                u32::from(insns[offset + 1]) | (u32::from(insns[offset + 2]) << 16);
             (
                 width,
                 Instruction::Goto {
@@ -396,9 +449,12 @@ fn decode_program(insns: &[u16]) -> Result<Vec<Option<DecodedInstruction>>, DexE
     while offset < insns.len() {
         let instruction = decode_instruction(insns, offset)?;
         program[offset] = Some(instruction);
-        offset = offset
-            .checked_add(instruction.width)
-            .ok_or(DexExecutionError::InvalidCodeItem("instruction offset overflow"))?;
+        offset =
+            offset
+                .checked_add(instruction.width)
+                .ok_or(DexExecutionError::InvalidCodeItem(
+                    "instruction offset overflow",
+                ))?;
     }
 
     // Validate every branch, including branches that may not be taken, and
@@ -406,14 +462,13 @@ fn decode_program(insns: &[u16]) -> Result<Vec<Option<DecodedInstruction>>, DexE
     for instruction in program.iter().flatten() {
         let relative_offset = match instruction.instruction {
             Instruction::Goto { relative_offset }
-            | Instruction::If { relative_offset, .. } => relative_offset,
+            | Instruction::If {
+                relative_offset, ..
+            } => relative_offset,
             _ => continue,
         };
         let target = instruction.offset as i64 + i64::from(relative_offset);
-        if target < 0
-            || target >= insns.len() as i64
-            || program[target as usize].is_none()
-        {
+        if target < 0 || target >= insns.len() as i64 || program[target as usize].is_none() {
             return Err(DexExecutionError::InvalidBranchTarget {
                 offset: instruction.offset,
                 target,
@@ -536,10 +591,7 @@ fn branch_target(
     program: &[Option<DecodedInstruction>],
 ) -> Result<usize, DexExecutionError> {
     let target = pc as i64 + i64::from(relative_offset);
-    if target < 0
-        || target >= program.len() as i64
-        || program[target as usize].is_none()
-    {
+    if target < 0 || target >= program.len() as i64 || program[target as usize].is_none() {
         return Err(DexExecutionError::InvalidBranchTarget {
             offset: pc,
             target,
@@ -571,13 +623,14 @@ fn write_register(
     offset: usize,
 ) -> Result<(), DexExecutionError> {
     let register_count = registers.len();
-    let target = registers
-        .get_mut(usize::from(register))
-        .ok_or(DexExecutionError::InvalidRegister {
-            offset,
-            register,
-            register_count,
-        })?;
+    let target =
+        registers
+            .get_mut(usize::from(register))
+            .ok_or(DexExecutionError::InvalidRegister {
+                offset,
+                register,
+                register_count,
+            })?;
     *target = value;
     Ok(())
 }
@@ -757,11 +810,7 @@ mod tests {
 
     #[test]
     fn rejects_code_items_above_the_hard_size_limit() {
-        let method = code(
-            0,
-            0,
-            &vec![0x000e; MAX_INTERPRETED_CODE_UNITS + 1],
-        );
+        let method = code(0, 0, &vec![0x000e; MAX_INTERPRETED_CODE_UNITS + 1]);
         assert_eq!(
             execute_integer_method(&method, &[], 10),
             Err(DexExecutionError::CodeTooLarge {
