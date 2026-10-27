@@ -35,7 +35,7 @@ mod error;
 mod inspect;
 mod manifest;
 #[cfg(test)]
-mod testutil;
+pub(crate) mod testutil;
 
 pub use error::{ApkError, UnsafeEntryReason};
 pub use inspect::{
