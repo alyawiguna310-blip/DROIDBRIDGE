@@ -1098,7 +1098,9 @@ impl IntegerDexEngine {
                     let method_idx = u32::from(code.insns[pc + 1]);
                     let (count, first_register, argument_registers) = if instruction.opcode == 0x71
                     {
-                        let count = usize::from((word >> 8) & 0x0f);
+                        // Format 35c: A (argument word count) occupies bits
+                        // 12..15; G (the fifth register) occupies bits 8..11.
+                        let count = usize::from(word >> 12);
                         if count > 5 {
                             return Err(EngineError::InvalidInstructionEncoding { pc, word });
                         }
@@ -1108,7 +1110,7 @@ impl IntegerDexEngine {
                             usize::from((packed >> 4) & 0x000f),
                             usize::from((packed >> 8) & 0x000f),
                             usize::from((packed >> 12) & 0x000f),
-                            usize::from((word >> 12) & 0x000f),
+                            usize::from((word >> 8) & 0x000f),
                         ];
                         (count, 0usize, regs.to_vec())
                     } else {
@@ -1664,7 +1666,7 @@ mod tests {
                 ins: 2,
                 outs: 2,
                 // invoke-static {v1, v2}, method@0; move-result v0; return v0
-                insns: vec![0x0271, 0x0000, 0x0021, 0x000a, 0x000f],
+                insns: vec![0x2071, 0x0000, 0x0021, 0x000a, 0x000f],
             },
         ]);
         let dex =
@@ -1675,6 +1677,44 @@ mod tests {
 
         assert_eq!(result.execution.return_value, EngineReturn::Int(42));
         assert_eq!(result.execution.instruction_steps, 5);
+    }
+
+    #[test]
+    fn decodes_invoke_static_35c_count_and_fifth_register_nibbles() {
+        let bytes = build_dex(&[
+            TestMethod {
+                name: "last",
+                return_type: "I",
+                params: vec!["I", "I", "I", "I", "I"],
+                registers: 6,
+                ins: 5,
+                outs: 0,
+                // Return v5, the fifth incoming argument.
+                insns: vec![0x050f],
+            },
+            TestMethod {
+                name: "caller",
+                return_type: "I",
+                params: vec!["I", "I", "I", "I", "I"],
+                registers: 6,
+                ins: 5,
+                outs: 5,
+                // invoke-static {v1, v2, v3, v4, v5}, method@0;
+                // A=5 is bits 12..15, G=5 is bits 8..11; CDEF=1,2,3,4.
+                insns: vec![0x5571, 0x0000, 0x4321, 0x000a, 0x000f],
+            },
+        ]);
+        let dex =
+            DexFile::parse(&bytes, &crate::dex::DexLimits::default()).expect("parse synthetic DEX");
+
+        let report = execute_static_integer_method(
+            &dex,
+            TEST_CLASS,
+            "caller",
+            &[11, 22, 33, 44, 55],
+        )
+        .expect("decode five invoke-static arguments");
+        assert_eq!(report.execution.return_value, EngineReturn::Int(55));
     }
 
     #[test]
@@ -1730,7 +1770,7 @@ mod tests {
                 ins: 1,
                 outs: 1,
                 // invoke-static {v0}, method@0; return v0
-                insns: vec![0x0171, 0x0000, 0x0000, 0x000f],
+                insns: vec![0x1071, 0x0000, 0x0000, 0x000f],
             },
         ]);
         let dex =
@@ -1753,7 +1793,7 @@ mod tests {
             ins: 1,
             outs: 1,
             // invoke-static {v1}, method@0; move-result v0; return v0
-            insns: vec![0x0171, 0x0000, 0x0001, 0x000a, 0x000f],
+            insns: vec![0x1071, 0x0000, 0x0001, 0x000a, 0x000f],
         }]);
         let dex =
             DexFile::parse(&bytes, &crate::dex::DexLimits::default()).expect("parse synthetic DEX");
@@ -1770,7 +1810,7 @@ mod tests {
 
     #[test]
     fn shares_instruction_step_budget_across_static_calls() {
-        let mut caller = code(3, 2, &[0x0271, 0x0000, 0x0021, 0x000a, 0x000f]);
+        let mut caller = code(3, 2, &[0x2071, 0x0000, 0x0021, 0x000a, 0x000f]);
         caller.outs_size = 2;
         let callee = code(3, 2, &[0x0090, 0x0201, 0x000f]);
         let engine = IntegerDexEngine::new(EngineLimits {
@@ -1877,7 +1917,7 @@ mod tests {
                 ins: 2,
                 outs: 2,
                 // invoke-static {v1, v2}, method@0; move-result v0; return v0
-                insns: vec![0x0271, 0x0000, 0x0021, 0x000a, 0x000f],
+                insns: vec![0x2071, 0x0000, 0x0021, 0x000a, 0x000f],
             },
         ]);
 
