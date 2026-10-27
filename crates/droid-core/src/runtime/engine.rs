@@ -1174,7 +1174,7 @@ impl IntegerDexEngine {
                     let value = read_register(&registers, src, pc)?;
                     write_register(&mut registers, dest, value, pc)?;
                 }
-                0x07 | 0x08 | 0x09 => {
+                0x07..=0x09 => {
                     let (dest, src) = match instruction.opcode {
                         0x07 => (usize::from((word >> 8) & 0x0f), usize::from(word >> 12)),
                         0x08 => (usize::from(word >> 8), usize::from(code.insns[pc + 1])),
@@ -2210,7 +2210,7 @@ mod tests {
         };
 
         assert_eq!(
-            engine.execute_with_budget(&caller, &[19, 23], &mut budget, Some(&mut resolver)),
+            engine.execute_with_budget(&caller, &[19, 23], &mut budget, None, Some(&mut resolver)),
             Err(EngineError::InstructionStepLimitExceeded { max: 4 })
         );
     }
