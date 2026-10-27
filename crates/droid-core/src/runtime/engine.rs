@@ -1220,6 +1220,90 @@ mod tests {
     }
 
     #[test]
+    fn executes_a_static_method_call_from_the_same_dex_file() {
+        let bytes = build_dex(&[
+            TestMethod {
+                name: "sum",
+                return_type: "I",
+                params: vec!["I", "I"],
+                registers: 3,
+                ins: 2,
+                outs: 0,
+                // add-int v0, v1, v2; return v0
+                insns: vec![0x0090, 0x0201, 0x000f],
+            },
+            TestMethod {
+                name: "caller",
+                return_type: "I",
+                params: vec!["I", "I"],
+                registers: 3,
+                ins: 2,
+                outs: 2,
+                // invoke-static {v1, v2}, method@0; move-result v0; return v0
+                insns: vec![0x0271, 0x0000, 0x0021, 0x000a, 0x000f],
+            },
+        ]);
+        let dex =
+            DexFile::parse(&bytes, &crate::dex::DexLimits::default()).expect("parse synthetic DEX");
+
+        let result = execute_static_integer_method(&dex, TEST_CLASS, "caller", &[19, 23])
+            .expect("execute caller and callee");
+
+        assert_eq!(result.execution.return_value, EngineReturn::Int(42));
+        assert_eq!(result.execution.instruction_steps, 5);
+    }
+
+    #[test]
+    fn bounds_recursive_static_calls_by_call_depth() {
+        let bytes = build_dex(&[TestMethod {
+            name: "recurse",
+            return_type: "I",
+            params: vec!["I"],
+            registers: 2,
+            ins: 1,
+            outs: 1,
+            // invoke-static {v1}, method@0; move-result v0; return v0
+            insns: vec![0x0171, 0x0000, 0x0001, 0x000a, 0x000f],
+        }]);
+        let dex =
+            DexFile::parse(&bytes, &crate::dex::DexLimits::default()).expect("parse synthetic DEX");
+
+        assert!(matches!(
+            execute_static_integer_method(&dex, TEST_CLASS, "recurse", &[1]),
+            Err(MethodExecutionError::Engine(
+                EngineError::MethodCallDepthLimitExceeded {
+                    max_depth: MAX_METHOD_CALL_DEPTH
+                }
+            ))
+        ));
+    }
+
+    #[test]
+    fn shares_instruction_step_budget_across_static_calls() {
+        let caller = code(3, 2, &[0x0271, 0x0000, 0x0021, 0x000a, 0x000f]);
+        let callee = code(3, 2, &[0x0090, 0x0201, 0x000f]);
+        let engine = IntegerDexEngine::new(EngineLimits {
+            max_code_units: 8,
+            max_instruction_steps: 4,
+        });
+        let mut budget = ExecutionBudget {
+            max_steps: 4,
+            steps: 0,
+        };
+        let mut resolver = |method_idx, arguments: &[i32], budget: &mut ExecutionBudget| {
+            assert_eq!(method_idx, 0);
+            engine
+                .execute_with_budget(&callee, arguments, budget, None)
+                .map(|report| report.return_value)
+        };
+
+        assert_eq!(
+            engine.execute_with_budget(&caller, &[19, 23], &mut budget, Some(&mut resolver)),
+            Err(EngineError::InstructionStepLimitExceeded { max: 4 })
+        );
+    }
+
+    #[test]
     fn lists_only_static_integer_methods_with_code() {
         let bytes = build_dex(&[TestMethod {
             name: "answer",
