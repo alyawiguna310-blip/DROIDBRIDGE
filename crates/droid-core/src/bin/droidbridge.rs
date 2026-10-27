@@ -30,8 +30,7 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn Error>> {
-    let command = parse_command(std::env::args_os().skip(1))
-        .map_err(io::Error::other)?;
+    let command = parse_command(std::env::args_os().skip(1)).map_err(io::Error::other)?;
     match command {
         CliCommand::Help => print_usage(),
         CliCommand::Inspect { apk } => inspect_apk(&apk)?,
@@ -102,10 +101,12 @@ where
         "help" | "--help" | "-h" => Err("help accepts no additional arguments".to_owned()),
         "inspect" => Err("usage: droidbridge inspect <apk-path>".to_owned()),
         "status" => Err("usage: droidbridge status".to_owned()),
-        "launch" => Err(
-            "usage: droidbridge launch <apk-path> <package-name> [profile-id]".to_owned(),
-        ),
-        _ => Err(format!("unknown command {command:?}; run 'droidbridge help'")),
+        "launch" => {
+            Err("usage: droidbridge launch <apk-path> <package-name> [profile-id]".to_owned())
+        }
+        _ => Err(format!(
+            "unknown command {command:?}; run 'droidbridge help'"
+        )),
     }
 }
 
@@ -141,7 +142,10 @@ fn print_apk_report(report: &ApkReport) {
     println!("minimum SDK: {:?}", report.manifest.min_sdk);
     println!("target SDK: {:?}", report.manifest.target_sdk);
     println!("application label: {:?}", report.manifest.label);
-    println!("requested permissions: {}", report.manifest.uses_permissions.len());
+    println!(
+        "requested permissions: {}",
+        report.manifest.uses_permissions.len()
+    );
     for permission in &report.manifest.uses_permissions {
         println!("  permission: {permission}");
     }
@@ -170,12 +174,19 @@ fn print_apk_report(report: &ApkReport) {
 }
 
 fn print_status(backend: &dyn RuntimeBackend) -> Result<(), Box<dyn Error>> {
-    println!("backend: {} ({})", backend.info().display_name, backend.info().id);
+    println!(
+        "backend: {} ({})",
+        backend.info().display_name,
+        backend.info().id
+    );
     println!("status: {:?}", backend.probe()?);
     let capabilities = backend.capabilities();
     println!("APK installation: {:?}", capabilities.apk_installation);
     println!("APK launch: {:?}", capabilities.apk_launch);
-    println!("ARM64 native execution: {:?}", capabilities.arm64_native_execution);
+    println!(
+        "ARM64 native execution: {:?}",
+        capabilities.arm64_native_execution
+    );
     println!(
         "hardware-accelerated graphics: {:?}",
         capabilities.hardware_accelerated_graphics
@@ -183,11 +194,7 @@ fn print_status(backend: &dyn RuntimeBackend) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn launch_apk(
-    apk: PathBuf,
-    package: String,
-    profile: String,
-) -> Result<(), Box<dyn Error>> {
+fn launch_apk(apk: PathBuf, package: String, profile: String) -> Result<(), Box<dyn Error>> {
     let request = LaunchRequest::new(apk, package, profile)?;
     let backend = WaydroidBackend::default();
     println!("Verifying APK and checking Waydroid before installation...");
@@ -263,7 +270,12 @@ mod tests {
     #[test]
     fn launch_accepts_an_explicit_profile() {
         assert_eq!(
-            parse_command(args(&["launch", "game.apk", "com.example.game", "MY_DEVICE"])),
+            parse_command(args(&[
+                "launch",
+                "game.apk",
+                "com.example.game",
+                "MY_DEVICE"
+            ])),
             Ok(CliCommand::Launch {
                 apk: PathBuf::from("game.apk"),
                 package: "com.example.game".to_owned(),
