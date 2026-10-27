@@ -396,6 +396,11 @@ pub fn execute_static_scalar_method_in_dex_set_at(
     let code = dexes[dex_index].code_item(method.code_off)?;
     let method_index = DexMethodIndex::build(dexes)?;
     let engine = IntegerDexEngine::default();
+    let context = DexExecutionContext {
+        dexes,
+        method_index: &method_index,
+        engine: &engine,
+    };
     let mut budget = ExecutionBudget {
         max_steps: engine.limits.max_instruction_steps,
         steps: 0,
@@ -408,12 +413,10 @@ pub fn execute_static_scalar_method_in_dex_set_at(
         .collect();
     let mut resolver = |target_method_idx: u32, arguments: &[i32], budget: &mut ExecutionBudget| {
         execute_dex_method_index(
-            dexes,
-            &method_index,
+            &context,
             dex_index,
             target_method_idx,
             arguments,
-            &engine,
             budget,
             1,
         )
@@ -464,13 +467,17 @@ pub fn execute_static_integer_method(
     execute_static_scalar_method(dex, class_descriptor, method_name, parameters)
 }
 
+struct DexExecutionContext<'a, 'dex> {
+    dexes: &'a [DexFile<'dex>],
+    method_index: &'a DexMethodIndex,
+    engine: &'a IntegerDexEngine,
+}
+
 fn execute_dex_method_index(
-    dexes: &[DexFile<'_>],
-    method_index: &DexMethodIndex,
+    context: &DexExecutionContext<'_, '_>,
     caller_dex_index: usize,
     method_idx: u32,
     parameters: &[i32],
-    engine: &IntegerDexEngine,
     budget: &mut ExecutionBudget,
     depth: usize,
 ) -> Result<EngineReturn, EngineError> {
@@ -481,12 +488,12 @@ fn execute_dex_method_index(
     }
 
     let (dex_index, method, signature) =
-        match find_encoded_method(dexes, method_index, caller_dex_index, method_idx) {
+        match find_encoded_method(context.dexes, context.method_index, caller_dex_index, method_idx) {
             Ok(resolved) => resolved,
             Err(error) => {
                 // A small, explicit set of framework intrinsics can be modeled
                 // without pretending that the Android framework itself is loaded.
-                let caller_dex = dexes.get(caller_dex_index).ok_or_else(|| {
+                let caller_dex = context.dexes.get(caller_dex_index).ok_or_else(|| {
                     static_call_failed(method_idx, "caller DEX index is outside the loaded DEX set")
                 })?;
                 let signature = caller_dex
@@ -538,7 +545,7 @@ fn execute_dex_method_index(
         ));
     }
 
-    let code = dexes[dex_index]
+    let code = context.dexes[dex_index]
         .code_item(method.code_off)
         .map_err(|error| static_call_failed(method_idx, error))?;
     let normalized_parameters: Vec<i32> = signature
@@ -549,17 +556,15 @@ fn execute_dex_method_index(
         .collect();
     let mut resolver = |child_method_idx: u32, arguments: &[i32], budget: &mut ExecutionBudget| {
         execute_dex_method_index(
-            dexes,
-            method_index,
+            context,
             dex_index,
             child_method_idx,
             arguments,
-            engine,
             budget,
             depth + 1,
         )
     };
-    let report = engine
+    let report = context.engine
         .execute_with_budget(&code, &normalized_parameters, budget, Some(&mut resolver))
         .map_err(|error| match error {
             EngineError::StaticCallFailed { method_idx, reason } => static_call_failed(
