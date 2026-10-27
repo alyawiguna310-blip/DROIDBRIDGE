@@ -6,7 +6,9 @@
 //! compatibility or graphics correctness.
 
 use droid_core::apk::{ApkLimits, ApkReport, inspect_file};
+use droid_core::dex::CodeItem;
 use droid_core::launcher::launch_verified_apk;
+use droid_core::runtime::engine::{EngineReturn, IntegerDexEngine};
 use droid_core::runtime::{
     LaunchRequest, RuntimeBackend, RuntimeSession, RuntimeSessionState, waydroid::WaydroidBackend,
 };
@@ -34,6 +36,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         CliCommand::Help => print_usage(),
         CliCommand::Inspect { apk } => inspect_apk(&apk)?,
         CliCommand::Status => print_status(&WaydroidBackend::default())?,
+        CliCommand::EngineDemo => run_engine_demo()?,
         CliCommand::Launch {
             apk,
             package,
@@ -50,6 +53,7 @@ enum CliCommand {
         apk: PathBuf,
     },
     Status,
+    EngineDemo,
     Launch {
         apk: PathBuf,
         package: String,
@@ -76,6 +80,7 @@ where
             apk: PathBuf::from(&arguments[1]),
         }),
         "status" if arguments.len() == 1 => Ok(CliCommand::Status),
+        "engine-demo" if arguments.len() == 1 => Ok(CliCommand::EngineDemo),
         "launch" if (3..=4).contains(&arguments.len()) => {
             let package = arguments[2]
                 .to_str()
@@ -100,6 +105,7 @@ where
         "help" | "--help" | "-h" => Err("help accepts no additional arguments".to_owned()),
         "inspect" => Err("usage: droidbridge inspect <apk-path>".to_owned()),
         "status" => Err("usage: droidbridge status".to_owned()),
+        "engine-demo" => Err("usage: droidbridge engine-demo".to_owned()),
         "launch" => {
             Err("usage: droidbridge launch <apk-path> <package-name> [profile-id]".to_owned())
         }
@@ -115,16 +121,40 @@ fn print_usage() {
          Usage:\n\
            droidbridge inspect <apk-path>\n\
            droidbridge status\n\
+           droidbridge engine-demo\n\
            droidbridge launch <apk-path> <package-name> [profile-id]\n\
            droidbridge help\n\n\
          Commands:\n\
-           inspect  Parse APK metadata without installing or executing it.\n\
-           status   Probe the existing Waydroid installation/session.\n\
-           launch   Verify the APK package and backend before delegating launch.\n\n\
+           inspect      Parse APK metadata without installing or executing it.\n\
+           status       Probe the existing Waydroid installation/session.\n\
+           engine-demo  Run a synthetic integer method in our own DEX engine.\n\
+           launch       Verify the APK package and backend before delegating launch.\n\n\
          The default launch profile id is {DEFAULT_PROFILE}. This does not apply\n\
          device identity spoofing. Waydroid must already be installed, initialized,\n\
          and running."
     );
+}
+
+fn run_engine_demo() -> Result<(), Box<dyn Error>> {
+    let code = CodeItem {
+        registers_size: 3,
+        ins_size: 0,
+        outs_size: 0,
+        tries_size: 0,
+        debug_info_off: 0,
+        insns: vec![0x0013, 7, 0x0113, 35, 0x0290, 0x0100, 0x020f],
+    };
+    let report = IntegerDexEngine::default().execute(&code, &[])?;
+    println!("engine: DROIDBRIDGE IntegerDexEngine");
+    println!("program: const/16 v0, 7; const/16 v1, 35; add-int v2, v0, v1; return v2");
+    println!("instructions executed: {}", report.instruction_steps);
+    match report.return_value {
+        EngineReturn::Int(value) => println!("return: {value}"),
+        EngineReturn::Void => {
+            return Err(io::Error::other("integer engine demo returned void").into());
+        }
+    }
+    Ok(())
 }
 
 fn inspect_apk(path: &std::path::Path) -> Result<(), Box<dyn Error>> {
@@ -281,6 +311,15 @@ mod tests {
                 profile: "MY_DEVICE".to_owned(),
             })
         );
+    }
+
+    #[test]
+    fn engine_demo_command_is_recognized() {
+        assert_eq!(
+            parse_command(args(&["engine-demo"])),
+            Ok(CliCommand::EngineDemo)
+        );
+        assert!(parse_command(args(&["engine-demo", "extra"])).is_err());
     }
 
     #[test]
