@@ -753,6 +753,7 @@ fn arithmetic(opcode: u8, left: i32, right: i32, pc: usize) -> Result<i32, Engin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dex::testutil::{TEST_CLASS, TestMethod, build_dex};
 
     fn code(registers_size: u16, ins_size: u16, insns: &[u16]) -> CodeItem {
         CodeItem {
@@ -922,4 +923,92 @@ mod tests {
             Err(EngineError::MissingReturn { pc: 1 })
         );
     }
+    #[test]
+    fn resolves_and_executes_an_integer_method_from_real_dex_metadata() {
+        let bytes = build_dex(&[TestMethod {
+            name: "sum",
+            return_type: "I",
+            params: vec!["I", "I"],
+            registers: 3,
+            ins: 2,
+            outs: 0,
+            // add-int v0, v1, v2; return v0
+            insns: vec![0x0090, 0x0201, 0x000f],
+        }]);
+        let dex = DexFile::parse(&bytes, &crate::dex::DexLimits::default())
+            .expect("parse synthetic DEX");
+
+        let result =
+            execute_static_integer_method(&dex, TEST_CLASS, "sum", &[19, 23])
+                .expect("execute method from DEX");
+
+        assert_eq!(result.signature.name, "sum");
+        assert_eq!(result.execution.return_value, EngineReturn::Int(42));
+        assert_eq!(result.execution.instruction_steps, 2);
+    }
+
+    #[test]
+    fn lists_only_static_integer_methods_with_code() {
+        let bytes = build_dex(&[TestMethod {
+            name: "answer",
+            return_type: "I",
+            params: vec![],
+            registers: 1,
+            ins: 0,
+            outs: 0,
+            insns: vec![0x0013, 42, 0x000f],
+        }]);
+        let dex = DexFile::parse(&bytes, &crate::dex::DexLimits::default())
+            .expect("parse synthetic DEX");
+
+        let methods = list_static_integer_methods(&dex, Some(TEST_CLASS))
+            .expect("list supported signatures");
+        assert_eq!(methods.len(), 1);
+        assert_eq!(methods[0].name, "answer");
+        assert_eq!(methods[0].return_type, "I");
+    }
+
+    #[test]
+    fn reports_wrong_argument_count_for_resolved_method() {
+        let bytes = build_dex(&[TestMethod {
+            name: "sum",
+            return_type: "I",
+            params: vec!["I", "I"],
+            registers: 3,
+            ins: 2,
+            outs: 0,
+            insns: vec![0x0090, 0x0201, 0x000f],
+        }]);
+        let dex = DexFile::parse(&bytes, &crate::dex::DexLimits::default())
+            .expect("parse synthetic DEX");
+
+        assert!(matches!(
+            execute_static_integer_method(&dex, TEST_CLASS, "sum", &[42]),
+            Err(MethodExecutionError::ArgumentCountMismatch {
+                actual: 1,
+                expected,
+                ..
+            }) if expected == vec![2]
+        ));
+    }
+
+    #[test]
+    fn refuses_to_execute_a_missing_method() {
+        let bytes = build_dex(&[TestMethod {
+            name: "answer",
+            return_type: "I",
+            params: vec![],
+            registers: 1,
+            ins: 0,
+            outs: 0,
+            insns: vec![0x0013, 42, 0x000f],
+        }]);
+        let dex = DexFile::parse(&bytes, &crate::dex::DexLimits::default())
+            .expect("parse synthetic DEX");
+        assert!(matches!(
+            execute_static_integer_method(&dex, TEST_CLASS, "missing", &[]),
+            Err(MethodExecutionError::MethodNotFound { .. })
+        ));
+    }
+
 }
