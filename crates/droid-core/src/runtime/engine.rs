@@ -182,7 +182,7 @@ fn normalize_int_like(ty: &str, value: i32) -> i32 {
 /// 32-bit register. This checks metadata only; method bodies may still contain
 /// unsupported instructions. Results follow DEX class/method order and can be
 /// filtered to one class descriptor.
-pub fn list_static_integer_methods(
+pub fn list_static_scalar_methods(
     dex: &DexFile<'_>,
     class_filter: Option<&str>,
 ) -> Result<Vec<MethodSignature>, MethodExecutionError> {
@@ -214,6 +214,16 @@ pub fn list_static_integer_methods(
     Ok(found)
 }
 
+/// Backwards-compatible name for listing the current integer-like scalar method set.
+///
+/// This includes `int`, `boolean`, `byte`, `short`, and `char` signatures.
+pub fn list_static_integer_methods(
+    dex: &DexFile<'_>,
+    class_filter: Option<&str>,
+) -> Result<Vec<MethodSignature>, MethodExecutionError> {
+    list_static_scalar_methods(dex, class_filter)
+}
+
 /// Resolve and execute a static scalar method from a parsed DEX file.
 ///
 /// Only methods returning int, boolean, byte, short, or char and taking zero
@@ -222,7 +232,7 @@ pub fn list_static_integer_methods(
 /// parameters, wide values, and general Android runtime behavior remain
 /// outside this engine's scope. Unsupported instructions and try/catch tables
 /// are rejected by the bounded interpreter.
-pub fn execute_static_integer_method(
+pub fn execute_static_scalar_method(
     dex: &DexFile<'_>,
     class_descriptor: &str,
     method_name: &str,
@@ -349,6 +359,17 @@ pub fn execute_static_integer_method(
         signature,
         execution,
     })
+}
+
+/// Backwards-compatible API name; the supported signature set now includes
+/// boolean, byte, short, and char in addition to 32-bit integers.
+pub fn execute_static_integer_method(
+    dex: &DexFile<'_>,
+    class_descriptor: &str,
+    method_name: &str,
+    parameters: &[i32],
+) -> Result<MethodExecutionReport, MethodExecutionError> {
+    execute_static_scalar_method(dex, class_descriptor, method_name, parameters)
 }
 
 fn execute_dex_method_index(
