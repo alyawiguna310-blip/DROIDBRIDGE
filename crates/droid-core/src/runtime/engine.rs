@@ -1707,13 +1707,9 @@ mod tests {
         let dex =
             DexFile::parse(&bytes, &crate::dex::DexLimits::default()).expect("parse synthetic DEX");
 
-        let report = execute_static_integer_method(
-            &dex,
-            TEST_CLASS,
-            "caller",
-            &[11, 22, 33, 44, 55],
-        )
-        .expect("decode five invoke-static arguments");
+        let report =
+            execute_static_integer_method(&dex, TEST_CLASS, "caller", &[11, 22, 33, 44, 55])
+                .expect("decode five invoke-static arguments");
         assert_eq!(report.execution.return_value, EngineReturn::Int(55));
     }
 
