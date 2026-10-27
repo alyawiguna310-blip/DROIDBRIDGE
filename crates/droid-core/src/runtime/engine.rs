@@ -495,9 +495,14 @@ fn execute_dex_method_index(
         ));
     }
     if parameters.len() != signature.parameter_types.len() {
+        let method_label = method_signature_label(&signature);
         return Err(static_call_failed(
             method_idx,
-            "argument count does not match the DEX method signature",
+            format!(
+                "call to {method_label} supplied {} arguments but the signature declares {} parameters",
+                parameters.len(),
+                signature.parameter_types.len()
+            ),
         ));
     }
 
