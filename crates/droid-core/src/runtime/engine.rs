@@ -1784,20 +1784,18 @@ mod tests {
 
     #[test]
     fn reuses_dex_set_executor_index_across_root_methods() {
-        let bytes = build_dex(&[
-            TestMethod {
-                name: "identity",
-                return_type: "I",
-                params: vec!["I"],
-                registers: 2,
-                ins: 1,
-                outs: 0,
-                // The incoming argument is v1; return it unchanged.
-                insns: vec![0x010f],
-            },
-        ]);
-        let dex = DexFile::parse(&bytes, &crate::dex::DexLimits::default())
-            .expect("parse synthetic DEX");
+        let bytes = build_dex(&[TestMethod {
+            name: "identity",
+            return_type: "I",
+            params: vec!["I"],
+            registers: 2,
+            ins: 1,
+            outs: 0,
+            // The incoming argument is v1; return it unchanged.
+            insns: vec![0x010f],
+        }]);
+        let dex =
+            DexFile::parse(&bytes, &crate::dex::DexLimits::default()).expect("parse synthetic DEX");
         let dexes = [dex];
         let executor = DexSetExecutor::new(&dexes).expect("index one loaded DEX set");
 
