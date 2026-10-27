@@ -205,7 +205,10 @@ pub fn list_static_scalar_methods(
             }
             let signature = dex.method_signature(method.method_idx)?;
             if is_int_like_type(&signature.return_type)
-                && signature.parameter_types.iter().all(|ty| is_int_like_type(ty))
+                && signature
+                    .parameter_types
+                    .iter()
+                    .all(|ty| is_int_like_type(ty))
             {
                 found.push(signature);
             }
@@ -308,7 +311,10 @@ pub fn execute_static_scalar_method(
         .into_iter()
         .filter(|(_, signature)| {
             is_int_like_type(&signature.return_type)
-                && signature.parameter_types.iter().all(|ty| is_int_like_type(ty))
+                && signature
+                    .parameter_types
+                    .iter()
+                    .all(|ty| is_int_like_type(ty))
         })
         .collect();
     if supported.is_empty() {
@@ -342,11 +348,16 @@ pub fn execute_static_scalar_method(
     let mut resolver = |target_method_idx: u32, arguments: &[i32], budget: &mut ExecutionBudget| {
         execute_dex_method_index(dex, target_method_idx, arguments, &engine, budget, 1)
     };
-    let mut execution =
-        engine.execute_with_budget(&code, &normalized_parameters, &mut budget, Some(&mut resolver))?;
+    let mut execution = engine.execute_with_budget(
+        &code,
+        &normalized_parameters,
+        &mut budget,
+        Some(&mut resolver),
+    )?;
     match execution.return_value {
         EngineReturn::Int(value) => {
-            execution.return_value = EngineReturn::Int(normalize_int_like(&signature.return_type, value));
+            execution.return_value =
+                EngineReturn::Int(normalize_int_like(&signature.return_type, value));
         }
         EngineReturn::Void => {
             return Err(MethodExecutionError::ReturnTypeMismatch {
@@ -399,7 +410,11 @@ fn execute_dex_method_index(
             "method has no code item (abstract/native/external methods are unsupported)",
         ));
     }
-    if !signature.parameter_types.iter().all(|ty| is_int_like_type(ty)) {
+    if !signature
+        .parameter_types
+        .iter()
+        .all(|ty| is_int_like_type(ty))
+    {
         return Err(static_call_failed(
             method_idx,
             "only int, boolean, byte, short, and char parameters are supported",
@@ -430,13 +445,17 @@ fn execute_dex_method_index(
     let mut resolver = |child_method_idx: u32, arguments: &[i32], budget: &mut ExecutionBudget| {
         execute_dex_method_index(dex, child_method_idx, arguments, engine, budget, depth + 1)
     };
-    let report =
-        engine.execute_with_budget(&code, &normalized_parameters, budget, Some(&mut resolver))?;
+    let report = engine.execute_with_budget(
+        &code,
+        &normalized_parameters,
+        budget,
+        Some(&mut resolver),
+    )?;
 
     match (signature.return_type.as_str(), report.return_value) {
-        ("I" | "Z" | "B" | "S" | "C", EngineReturn::Int(value)) => {
-            Ok(EngineReturn::Int(normalize_int_like(&signature.return_type, value)))
-        }
+        ("I" | "Z" | "B" | "S" | "C", EngineReturn::Int(value)) => Ok(EngineReturn::Int(
+            normalize_int_like(&signature.return_type, value),
+        )),
         ("V", EngineReturn::Void) => Ok(EngineReturn::Void),
         ("I" | "Z" | "B" | "S" | "C", EngineReturn::Void) => Err(static_call_failed(
             method_idx,
