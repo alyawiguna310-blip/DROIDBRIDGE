@@ -706,10 +706,7 @@ fn execute_dex_method_index(
             EngineReturn::ObjectReference { .. }
             | EngineReturn::StringReference { .. }
             | EngineReturn::NullReference,
-        ) if is_reference_type(ty) =>
-        {
-            Ok(report.return_value)
-        }
+        ) if is_reference_type(ty) => Ok(report.return_value),
         _ => Err(static_call_failed(
             method_idx,
             format!(
@@ -1309,8 +1306,7 @@ impl IntegerDexEngine {
                     let string_idx = match instruction.opcode {
                         0x1a => u32::from(code.insns[pc + 1]),
                         0x1b => {
-                            u32::from(code.insns[pc + 1])
-                                | (u32::from(code.insns[pc + 2]) << 16)
+                            u32::from(code.insns[pc + 1]) | (u32::from(code.insns[pc + 2]) << 16)
                         }
                         _ => unreachable!("only string-constant opcodes are dispatched"),
                     };
@@ -1640,7 +1636,16 @@ fn decode_program(
             | 0x8d..=0x8f
             | 0xb0..=0xba => 1,
             0x0a | 0x0c if allow_static_calls => 1,
-            0x02 | 0x08 | 0x13 | 0x15 | 0x1a | 0x22 | 0x29 | 0x32..=0x3d | 0x90..=0x9a | 0xd0..=0xe2 => 2,
+            0x02
+            | 0x08
+            | 0x13
+            | 0x15
+            | 0x1a
+            | 0x22
+            | 0x29
+            | 0x32..=0x3d
+            | 0x90..=0x9a
+            | 0xd0..=0xe2 => 2,
             0x03 | 0x09 | 0x14 | 0x1b | 0x2a => 3,
             0x71 | 0x77 if allow_static_calls => 3,
             _ => return Err(EngineError::UnsupportedOpcode { pc, opcode }),
@@ -1940,14 +1945,12 @@ fn compare_register_zero(
         RegisterValue::StringReference { .. } if opcode == 0x39 => Ok(true),
         reference @ (RegisterValue::NullReference
         | RegisterValue::ObjectReference { .. }
-        | RegisterValue::StringReference { .. }) => {
-            Err(EngineError::RegisterTypeMismatch {
-                pc,
-                register,
-                expected: "integer for ordered zero comparison, or reference for if-eqz/if-nez",
-                actual: reference.kind_name(),
-            })
-        }
+        | RegisterValue::StringReference { .. }) => Err(EngineError::RegisterTypeMismatch {
+            pc,
+            register,
+            expected: "integer for ordered zero comparison, or reference for if-eqz/if-nez",
+            actual: reference.kind_name(),
+        }),
     }
 }
 
@@ -2066,13 +2069,13 @@ mod tests {
                 // if-eqz v0, fail; const-string v1, "text";
                 // if-eq v0, v1, pass; return 0; return 1.
                 insns: vec![
-                    0x0071, 0, 0, 0x000c, 0x0038, 6, 0x011a, 4, 0x1032, 4, 0x0012, 0x000f,
-                    0x1012, 0x000f,
+                    0x0071, 0, 0, 0x000c, 0x0038, 6, 0x011a, 4, 0x1032, 4, 0x0012, 0x000f, 0x1012,
+                    0x000f,
                 ],
             },
         ]);
-        let dex = DexFile::parse(&bytes, &crate::dex::DexLimits::default())
-            .expect("parse synthetic DEX");
+        let dex =
+            DexFile::parse(&bytes, &crate::dex::DexLimits::default()).expect("parse synthetic DEX");
         assert_eq!(dex.string(4).expect("string pool index 4"), "text");
 
         let report = execute_static_scalar_method(&dex, TEST_CLASS, "answer", &[])
@@ -2091,16 +2094,18 @@ mod tests {
             outs: 0,
             insns: vec![0x001a, 0xffff],
         }]);
-        let dex = DexFile::parse(&bytes, &crate::dex::DexLimits::default())
-            .expect("parse synthetic DEX");
+        let dex =
+            DexFile::parse(&bytes, &crate::dex::DexLimits::default()).expect("parse synthetic DEX");
 
         assert!(matches!(
             execute_static_scalar_method(&dex, TEST_CLASS, "answer", &[]),
-            Err(MethodExecutionError::Engine(EngineError::StringResolutionFailed {
-                pc: 0,
-                string_idx: 0xffff,
-                ..
-            }))
+            Err(MethodExecutionError::Engine(
+                EngineError::StringResolutionFailed {
+                    pc: 0,
+                    string_idx: 0xffff,
+                    ..
+                }
+            ))
         ));
     }
 
