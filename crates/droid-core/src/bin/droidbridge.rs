@@ -9,8 +9,8 @@ use droid_core::apk::{ApkLimits, ApkReport, inspect_file, read_dex_entry};
 use droid_core::dex::{CodeItem, DexFile, DexLimits};
 use droid_core::launcher::launch_verified_apk;
 use droid_core::runtime::engine::{
-    EngineReturn, IntegerDexEngine, execute_static_scalar_method, execute_static_scalar_method_in_dex_set,
-    list_static_scalar_methods,
+    EngineReturn, IntegerDexEngine, execute_static_scalar_method,
+    execute_static_scalar_method_in_dex_set, list_static_scalar_methods,
 };
 use droid_core::runtime::{
     LaunchRequest, RuntimeBackend, RuntimeSession, RuntimeSessionState, waydroid::WaydroidBackend,
@@ -274,15 +274,19 @@ fn load_dex_bundle_from_apk<'a>(
         .iter()
         .any(|entry| entry.entry_name == requested_entry)
     {
-        return Err(
-            io::Error::other(format!("DEX entry {requested_entry:?} was not found in the APK"))
-                .into(),
-        );
+        return Err(io::Error::other(format!(
+            "DEX entry {requested_entry:?} was not found in the APK"
+        ))
+        .into());
     }
 
     buffers.clear();
     entry_names.clear();
-    for entry in report.dex_files.iter().filter(|entry| entry.outcome.is_ok()) {
+    for entry in report
+        .dex_files
+        .iter()
+        .filter(|entry| entry.outcome.is_ok())
+    {
         buffers.push(read_dex_entry(apk, &entry.entry_name, limits)?);
         entry_names.push(entry.entry_name.clone());
     }
@@ -344,13 +348,7 @@ fn probe_methods(
     let limits = ApkLimits::default();
     let mut buffers = Vec::new();
     let mut entry_names = Vec::new();
-    let dexes = load_dex_bundle_from_apk(
-        apk,
-        dex_entry,
-        &limits,
-        &mut buffers,
-        &mut entry_names,
-    )?;
+    let dexes = load_dex_bundle_from_apk(apk, dex_entry, &limits, &mut buffers, &mut entry_names)?;
     let root_dex_index = entry_names
         .iter()
         .position(|name| name == dex_entry)
