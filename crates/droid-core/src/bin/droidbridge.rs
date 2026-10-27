@@ -449,6 +449,9 @@ fn run_method(
         EngineReturn::Void => {
             return Err(io::Error::other("scalar method unexpectedly returned void").into());
         }
+        EngineReturn::NullReference | EngineReturn::ObjectReference { .. } => {
+            return Err(io::Error::other("scalar method unexpectedly returned an object reference").into());
+        }
     }
     Ok(())
 }
@@ -470,6 +473,9 @@ fn run_engine_demo() -> Result<(), Box<dyn Error>> {
         EngineReturn::Int(value) => println!("return: {value}"),
         EngineReturn::Void => {
             return Err(io::Error::other("integer engine demo returned void").into());
+        }
+        EngineReturn::NullReference | EngineReturn::ObjectReference { .. } => {
+            return Err(io::Error::other("integer engine demo returned an object reference").into());
         }
     }
     Ok(())
