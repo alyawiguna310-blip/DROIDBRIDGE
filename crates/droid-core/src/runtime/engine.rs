@@ -288,11 +288,141 @@ pub fn execute_static_integer_method(
         });
     }
     let code = dex.code_item(method.code_off)?;
-    let execution = IntegerDexEngine::default().execute(&code, parameters)?;
+    let engine = IntegerDexEngine::default();
+    let mut budget = ExecutionBudget {
+        max_steps: engine.limits.max_instruction_steps,
+        steps: 0,
+    };
+    let mut resolver = |target_method_idx, arguments, budget: &mut ExecutionBudget| {
+        execute_dex_method_index(dex, target_method_idx, arguments, &engine, budget, 1)
+    };
+    let execution =
+        engine.execute_with_budget(&code, parameters, &mut budget, Some(&mut resolver))?;
     Ok(MethodExecutionReport {
         signature,
         execution,
     })
+}
+
+fn execute_dex_method_index(
+    dex: &DexFile<'_>,
+    method_idx: u32,
+    parameters: &[i32],
+    engine: &IntegerDexEngine,
+    budget: &mut ExecutionBudget,
+    depth: usize,
+) -> Result<EngineReturn, EngineError> {
+    if depth > MAX_METHOD_CALL_DEPTH {
+        return Err(EngineError::MethodCallDepthLimitExceeded {
+            max_depth: MAX_METHOD_CALL_DEPTH,
+        });
+    }
+
+    let (method, signature) = find_encoded_method(dex, method_idx)?;
+    if method.access_flags & 0x8 == 0 {
+        return Err(static_call_failed(
+            method_idx,
+            "only static methods are supported",
+        ));
+    }
+    if method.code_off == 0 {
+        return Err(static_call_failed(
+            method_idx,
+            "method has no code item (abstract/native/external methods are unsupported)",
+        ));
+    }
+    if !signature.parameter_types.iter().all(|ty| ty == "I") {
+        return Err(static_call_failed(
+            method_idx,
+            "only 32-bit integer parameters are supported",
+        ));
+    }
+    if signature.return_type != "I" && signature.return_type != "V" {
+        return Err(static_call_failed(
+            method_idx,
+            "only int and void return types are supported",
+        ));
+    }
+    if parameters.len() != signature.parameter_types.len() {
+        return Err(static_call_failed(
+            method_idx,
+            "argument count does not match the DEX method signature",
+        ));
+    }
+
+    let code = dex
+        .code_item(method.code_off)
+        .map_err(|error| static_call_failed(method_idx, error))?;
+    let mut resolver = |child_method_idx, arguments, budget: &mut ExecutionBudget| {
+        execute_dex_method_index(
+            dex,
+            child_method_idx,
+            arguments,
+            engine,
+            budget,
+            depth + 1,
+        )
+    };
+    let report = engine.execute_with_budget(&code, parameters, budget, Some(&mut resolver))?;
+
+    match (signature.return_type.as_str(), report.return_value) {
+        ("I", EngineReturn::Int(value)) => Ok(EngineReturn::Int(value)),
+        ("V", EngineReturn::Void) => Ok(EngineReturn::Void),
+        ("I", EngineReturn::Void) => Err(static_call_failed(
+            method_idx,
+            "method is declared to return int but executed return-void",
+        )),
+        ("V", EngineReturn::Int(_)) => Err(static_call_failed(
+            method_idx,
+            "method is declared void but executed an integer return",
+        )),
+        _ => unreachable!("only int and void signatures passed validation"),
+    }
+}
+
+fn find_encoded_method(
+    dex: &DexFile<'_>,
+    method_idx: u32,
+) -> Result<(EncodedMethod, MethodSignature), EngineError> {
+    let signature = dex
+        .method_signature(method_idx)
+        .map_err(|error| static_call_failed(method_idx, error))?;
+    for class in dex.class_defs() {
+        let descriptor = dex
+            .type_descriptor(class.class_idx)
+            .map_err(|error| static_call_failed(method_idx, error))?;
+        if descriptor != signature.class_descriptor {
+            continue;
+        }
+        let data = dex
+            .class_data(class)
+            .map_err(|error| static_call_failed(method_idx, error))?;
+        let Some(data) = data else {
+            continue;
+        };
+        if let Some(method) = data
+            .direct_methods
+            .iter()
+            .chain(data.virtual_methods.iter())
+            .find(|method| method.method_idx == method_idx)
+        {
+            return Ok((*method, signature));
+        }
+    }
+    Err(static_call_failed(
+        method_idx,
+        "method definition is not present in this DEX file",
+    ))
+}
+
+fn static_call_failed(
+    method_idx: u32,
+    error: impl fmt::Display,
+) -> EngineError {
+    EngineError::StaticCallFailed {
+        method_idx,
+        reason: error.to_string(),
+    }
 }
 
 fn same_name_signature_label(class_descriptor: &str, method_name: &str, arity: usize) -> String {
@@ -588,7 +718,7 @@ impl IntegerDexEngine {
                     let src = usize::from(word >> 8);
                     return Ok(ExecutionReport {
                         return_value: EngineReturn::Int(read_register(&registers, src, pc)?),
-                        instruction_steps: steps,
+                        instruction_steps: budget.steps - start_steps,
                     });
                 }
                 0x12 => {
