@@ -2,15 +2,16 @@
 //!
 //! This is an early runtime component, not Android Runtime (ART) and not a
 //! complete Android application environment. It executes only a bounded subset
-//! of DEX instructions over 32-bit integer registers. Objects, method calls,
-//! fields, arrays, exceptions, Android framework APIs, native libraries, and
-//! graphics are intentionally unsupported.
+//! of DEX instructions over 32-bit integer registers. Same-DEX static calls
+//! between integer/void methods are supported with bounded depth and a shared
+//! instruction budget. Objects, fields, arrays, exceptions, Android framework
+//! APIs, native libraries, and graphics are still unsupported.
 //!
 //! The input is a parsed CodeItem. It must have no try/catch table and must
 //! use only instructions listed in IntegerDexEngine's implementation.
 //! Unsupported instructions are rejected before execution.
 
-use crate::dex::{CodeItem, DexError, DexFile, MethodSignature};
+use crate::dex::{CodeItem, DexError, DexFile, EncodedMethod, MethodSignature};
 use std::error::Error;
 use std::fmt;
 
@@ -359,6 +360,16 @@ pub enum EngineError {
     MissingReturn {
         pc: usize,
     },
+    MoveResultWithoutIntegerResult {
+        pc: usize,
+    },
+    StaticCallFailed {
+        method_idx: u32,
+        reason: String,
+    },
+    MethodCallDepthLimitExceeded {
+        max_depth: usize,
+    },
 }
 
 impl fmt::Display for EngineError {
@@ -424,6 +435,15 @@ impl fmt::Display for EngineError {
                     "DEX method reached code unit {pc} without a return instruction"
                 )
             }
+            Self::MoveResultWithoutIntegerResult { pc } => {
+                write!(f, "move-result at code unit {pc} has no pending integer result")
+            }
+            Self::StaticCallFailed { method_idx, reason } => {
+                write!(f, "invoke-static method index {method_idx} failed: {reason}")
+            }
+            Self::MethodCallDepthLimitExceeded { max_depth } => {
+                write!(f, "DEX method call depth exceeded the limit of {max_depth}")
+            }
         }
     }
 }
@@ -468,6 +488,20 @@ impl IntegerDexEngine {
         code: &CodeItem,
         parameters: &[i32],
     ) -> Result<ExecutionReport, EngineError> {
+        let mut budget = ExecutionBudget {
+            max_steps: self.limits.max_instruction_steps,
+            steps: 0,
+        };
+        self.execute_with_budget(code, parameters, &mut budget, None)
+    }
+
+    fn execute_with_budget(
+        &self,
+        code: &CodeItem,
+        parameters: &[i32],
+        budget: &mut ExecutionBudget,
+        mut resolver: Option<&mut StaticCallResolver<'_>>,
+    ) -> Result<ExecutionReport, EngineError> {
         if code.insns.len() > self.limits.max_code_units {
             return Err(EngineError::CodeTooLarge {
                 size: code.insns.len(),
@@ -491,24 +525,31 @@ impl IntegerDexEngine {
             });
         }
 
-        let program = decode_program(&code.insns)?;
+        let program = decode_program(&code.insns, resolver.is_some())?;
         let mut registers = vec![0_i32; usize::from(code.registers_size)];
         let parameter_start = registers.len() - expected_parameters;
         registers[parameter_start..].copy_from_slice(parameters);
 
+        let start_steps = budget.steps;
         let mut pc = 0usize;
-        let mut steps = 0u64;
+        let mut pending_result: Option<EngineReturn> = None;
         while pc < program.len() {
-            if steps >= self.limits.max_instruction_steps {
+            if budget.steps >= budget.max_steps {
                 return Err(EngineError::InstructionStepLimitExceeded {
-                    max: self.limits.max_instruction_steps,
+                    max: budget.max_steps,
                 });
             }
-            steps += 1;
+            budget.steps += 1;
 
             let instruction = program[pc].ok_or(EngineError::MissingReturn { pc })?;
             let word = code.insns[pc];
             let mut next_pc = pc + instruction.width;
+            let current_result = if instruction.opcode == 0x0a {
+                pending_result.take()
+            } else {
+                pending_result = None;
+                None
+            };
 
             match instruction.opcode {
                 0x00 => {}
@@ -530,10 +571,17 @@ impl IntegerDexEngine {
                     let value = read_register(&registers, src, pc)?;
                     write_register(&mut registers, dest, value, pc)?;
                 }
+                0x0a => {
+                    let value = match current_result {
+                        Some(EngineReturn::Int(value)) => value,
+                        _ => return Err(EngineError::MoveResultWithoutIntegerResult { pc }),
+                    };
+                    write_register(&mut registers, usize::from(word >> 8), value, pc)?;
+                }
                 0x0e => {
                     return Ok(ExecutionReport {
                         return_value: EngineReturn::Void,
-                        instruction_steps: steps,
+                        instruction_steps: budget.steps - start_steps,
                     });
                 }
                 0x0f => {
@@ -607,6 +655,48 @@ impl IntegerDexEngine {
                     let value = arithmetic(instruction.opcode - 0x20, left, right, pc)?;
                     write_register(&mut registers, dest, value, pc)?;
                 }
+                0x71 | 0x77 => {
+                    let method_idx = u32::from(code.insns[pc + 1]);
+                    let (count, first_register, argument_registers) = if instruction.opcode == 0x71 {
+                        let count = usize::from((word >> 8) & 0x0f);
+                        if count > 5 {
+                            return Err(EngineError::InvalidInstructionEncoding { pc, word });
+                        }
+                        let packed = code.insns[pc + 2];
+                        let regs = [
+                            usize::from(packed & 0x000f),
+                            usize::from((packed >> 4) & 0x000f),
+                            usize::from((packed >> 8) & 0x000f),
+                            usize::from((packed >> 12) & 0x000f),
+                            usize::from((word >> 12) & 0x000f),
+                        ];
+                        (count, 0usize, regs.to_vec())
+                    } else {
+                        (
+                            usize::from(word >> 8),
+                            usize::from(code.insns[pc + 2]),
+                            Vec::new(),
+                        )
+                    };
+                    let mut arguments = Vec::with_capacity(count);
+                    if instruction.opcode == 0x71 {
+                        for register in argument_registers.into_iter().take(count) {
+                            arguments.push(read_register(&registers, register, pc)?);
+                        }
+                    } else {
+                        for offset in 0..count {
+                            arguments.push(read_register(
+                                &registers,
+                                first_register + offset,
+                                pc,
+                            )?);
+                        }
+                    }
+                    let Some(call_resolver) = resolver.as_deref_mut() else {
+                        return Err(EngineError::UnsupportedOpcode { pc, opcode: instruction.opcode });
+                    };
+                    pending_result = Some(call_resolver(method_idx, &arguments, budget)?);
+                }
                 opcode => return Err(EngineError::UnsupportedOpcode { pc, opcode }),
             }
 
@@ -617,6 +707,17 @@ impl IntegerDexEngine {
     }
 }
 
+const MAX_METHOD_CALL_DEPTH: usize = 32;
+
+#[derive(Debug)]
+struct ExecutionBudget {
+    max_steps: u64,
+    steps: u64,
+}
+
+type StaticCallResolver<'a> =
+    dyn FnMut(u32, &[i32], &mut ExecutionBudget) -> Result<EngineReturn, EngineError> + 'a;
+
 #[derive(Debug, Clone, Copy)]
 struct DecodedInstruction {
     opcode: u8,
@@ -624,7 +725,10 @@ struct DecodedInstruction {
     branch_target: Option<usize>,
 }
 
-fn decode_program(code: &[u16]) -> Result<Vec<Option<DecodedInstruction>>, EngineError> {
+fn decode_program(
+    code: &[u16],
+    allow_static_calls: bool,
+) -> Result<Vec<Option<DecodedInstruction>>, EngineError> {
     let mut program = vec![None; code.len()];
     let mut pc = 0usize;
 
@@ -635,8 +739,10 @@ fn decode_program(code: &[u16]) -> Result<Vec<Option<DecodedInstruction>>, Engin
             0x00 if word == 0 => 1,
             0x00 => return Err(EngineError::UnsupportedOpcode { pc, opcode }),
             0x01 | 0x0e | 0x0f | 0x12 | 0x28 | 0xb0..=0xba => 1,
+            0x0a if allow_static_calls => 1,
             0x02 | 0x13 | 0x15 | 0x29 | 0x32..=0x3d | 0x90..=0x9a => 2,
             0x03 | 0x14 | 0x2a => 3,
+            0x71 | 0x77 if allow_static_calls => 3,
             _ => return Err(EngineError::UnsupportedOpcode { pc, opcode }),
         };
 
@@ -903,7 +1009,7 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_opcodes_before_execution() {
-        let method = code(0, 0, &[0x0071, 0x000e]); // invoke-static is unsupported
+        let method = code(0, 0, &[0x0071, 0x000e]); // no resolver is provided
         assert_eq!(
             run(&method, &[]),
             Err(EngineError::UnsupportedOpcode {
