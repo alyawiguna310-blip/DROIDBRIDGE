@@ -55,6 +55,10 @@ pub enum ApkError {
     DuplicateEntry { name: String },
     /// A required entry is absent.
     MissingEntry { name: &'static str },
+    /// The requested name is not a top-level classes.dex/classesN.dex entry.
+    NotDexEntry { name: String },
+    /// A recognized DEX entry is not present in the archive.
+    MissingDexEntry { name: String },
     /// An entry is larger than the limit for its kind.
     EntryTooLarge { name: String, size: u64, max: u64 },
     /// An entry exists but could not be read (corrupt, encrypted, unsupported).
@@ -88,6 +92,12 @@ impl fmt::Display for ApkError {
             }
             Self::DuplicateEntry { name } => write!(f, "duplicate archive entry {name:?}"),
             Self::MissingEntry { name } => write!(f, "required entry {name} is missing"),
+            Self::NotDexEntry { name } => {
+                write!(f, "archive entry {name:?} is not a recognized top-level DEX entry")
+            }
+            Self::MissingDexEntry { name } => {
+                write!(f, "DEX entry {name:?} is missing from the archive")
+            }
             Self::EntryTooLarge { name, size, max } => write!(
                 f,
                 "entry {name:?} is {size} bytes, larger than the {max} byte limit"
