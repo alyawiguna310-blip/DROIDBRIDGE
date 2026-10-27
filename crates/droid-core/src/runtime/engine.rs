@@ -493,6 +493,7 @@ impl<'dexes, 'data> DexSetExecutor<'dexes, 'data> {
             steps: 0,
             next_object_id: 0,
             interned_strings: HashMap::new(),
+            string_references: HashMap::new(),
         };
         let normalized_parameters: Vec<i32> = signature
             .parameter_types
@@ -1121,6 +1122,7 @@ impl IntegerDexEngine {
             steps: 0,
             next_object_id: 0,
             interned_strings: HashMap::new(),
+            string_references: HashMap::new(),
         };
         self.execute_with_budget(code, parameters, &mut budget, None, None)
     }
@@ -1311,24 +1313,33 @@ impl IntegerDexEngine {
                         }
                         _ => unreachable!("only string-constant opcodes are dispatched"),
                     };
-                    let literal = dex.string(string_idx).map_err(|error| {
-                        EngineError::StringResolutionFailed {
-                            pc,
-                            string_idx,
-                            reason: error.to_string(),
-                        }
-                    })?;
+                    let string_key = (dex_index, string_idx);
                     let object_id = if let Some(object_id) =
-                        budget.interned_strings.get(&literal).copied()
+                        budget.string_references.get(&string_key).copied()
                     {
                         object_id
                     } else {
-                        let object_id = budget
-                            .next_object_id
-                            .checked_add(1)
-                            .ok_or(EngineError::ObjectIdLimitExceeded { pc })?;
-                        budget.next_object_id = object_id;
-                        budget.interned_strings.insert(literal, object_id);
+                        let literal = dex.string(string_idx).map_err(|error| {
+                            EngineError::StringResolutionFailed {
+                                pc,
+                                string_idx,
+                                reason: error.to_string(),
+                            }
+                        })?;
+                        let object_id = if let Some(object_id) =
+                            budget.interned_strings.get(&literal).copied()
+                        {
+                            object_id
+                        } else {
+                            let object_id = budget
+                                .next_object_id
+                                .checked_add(1)
+                                .ok_or(EngineError::ObjectIdLimitExceeded { pc })?;
+                            budget.next_object_id = object_id;
+                            budget.interned_strings.insert(literal, object_id);
+                            object_id
+                        };
+                        budget.string_references.insert(string_key, object_id);
                         object_id
                     };
                     write_object_register(
@@ -1588,8 +1599,10 @@ struct ExecutionBudget {
     max_steps: u64,
     steps: u64,
     next_object_id: u32,
-    /// Shared by nested calls so the same literal has stable identity across DEX files.
+    /// Shared by nested calls so equal literals have stable identity across DEX files.
     interned_strings: HashMap<String, u32>,
+    /// Avoid re-decoding string data when an instruction executes repeatedly.
+    string_references: HashMap<(usize, u32), u32>,
 }
 
 type StaticCallResolver<'a> =
@@ -2539,6 +2552,7 @@ mod tests {
             steps: 0,
             next_object_id: 0,
             interned_strings: HashMap::new(),
+            string_references: HashMap::new(),
         };
         let mut resolver = |method_idx, arguments: &[i32], budget: &mut ExecutionBudget| {
             assert_eq!(method_idx, 0);
