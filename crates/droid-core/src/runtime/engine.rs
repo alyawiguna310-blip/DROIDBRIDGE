@@ -216,7 +216,11 @@ pub fn execute_static_integer_method(
     };
 
     let mut same_name = Vec::new();
-    for method in data.direct_methods.iter().chain(data.virtual_methods.iter()) {
+    for method in data
+        .direct_methods
+        .iter()
+        .chain(data.virtual_methods.iter())
+    {
         let signature = dex.method_signature(method.method_idx)?;
         if signature.name == method_name {
             same_name.push((*method, signature));
