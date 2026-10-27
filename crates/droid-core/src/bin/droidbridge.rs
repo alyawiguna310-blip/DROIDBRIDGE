@@ -600,7 +600,6 @@ fn print_status(backend: &dyn RuntimeBackend) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-
 /// Dump raw code units for one exact method signature without executing it.
 /// An optional code-unit offset resolves method/type/string operands for inspection.
 fn dump_method(
@@ -669,9 +668,7 @@ fn dump_method(
                 println!("  {pc:04}: 0x{word:04x}");
             }
             if code.insns.len() > MAX_CODE_UNITS_TO_PRINT {
-                println!(
-                    "raw dump truncated to the first {MAX_CODE_UNITS_TO_PRINT} code units"
-                );
+                println!("raw dump truncated to the first {MAX_CODE_UNITS_TO_PRINT} code units");
             }
 
             if let Some(pc) = code_unit_offset {
@@ -683,9 +680,7 @@ fn dump_method(
                     .into());
                 };
                 let opcode = (word & 0xff) as u8;
-                println!(
-                    "selected code unit {pc}: word 0x{word:04x}, opcode 0x{opcode:02x}"
-                );
+                println!("selected code unit {pc}: word 0x{word:04x}, opcode 0x{opcode:02x}");
                 if matches!(opcode, 0x6e..=0x72 | 0x74..=0x78) {
                     if let (Some(method_idx), Some(packed)) =
                         (code.insns.get(pc + 1), code.insns.get(pc + 2))
@@ -698,12 +693,14 @@ fn dump_method(
                             println!("invoke/range first register: v{first_register}");
                         } else {
                             let count = usize::from((word >> 12) & 0x0f);
+                            // 35c layout is C, D, E, F in the third code unit,
+                            // followed by G in the high byte of the first code unit.
                             let registers = [
-                                usize::from((word >> 8) & 0x0f),
                                 usize::from(packed & 0x000f),
                                 usize::from((packed >> 4) & 0x000f),
                                 usize::from((packed >> 8) & 0x000f),
                                 usize::from((packed >> 12) & 0x000f),
+                                usize::from((word >> 8) & 0x0f),
                             ];
                             println!("invoke argument-word count: {count}");
                             if count <= registers.len() {
