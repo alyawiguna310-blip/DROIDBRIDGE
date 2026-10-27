@@ -1,8 +1,10 @@
 //! Shared, host-independent configuration types for DROIDBRIDGE.
 //!
-//! This crate intentionally does not execute APKs or spoof hardware directly.
-//! It keeps configurable Android-facing properties separate from detected host
-//! capabilities so a profile cannot silently imply unsupported host features.
+//! This crate does not launch APKs end-to-end or spoof hardware directly.
+//! It includes an experimental bounded DEX interpreter for a small integer-only
+//! instruction subset, but does not yet provide the full Android runtime.
+//! Configurable Android-facing properties stay separate from detected host
+//! capabilities so profiles cannot silently imply unsupported host features.
 //!
 //! Modules:
 //! - [`config`]: portable, versioned [`BridgeConfig`].
