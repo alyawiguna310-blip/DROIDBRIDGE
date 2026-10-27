@@ -1783,6 +1783,33 @@ mod tests {
     }
 
     #[test]
+    fn reuses_dex_set_executor_index_across_root_methods() {
+        let bytes = build_dex(&[
+            TestMethod {
+                name: "identity",
+                return_type: "I",
+                params: vec!["I"],
+                registers: 2,
+                ins: 1,
+                outs: 0,
+                // The incoming argument is v1; return it unchanged.
+                insns: vec![0x010f],
+            },
+        ]);
+        let dex = DexFile::parse(&bytes, &crate::dex::DexLimits::default())
+            .expect("parse synthetic DEX");
+        let dexes = [dex];
+        let executor = DexSetExecutor::new(&dexes).expect("index one loaded DEX set");
+
+        for (input, expected) in [(42, 42), (-7, -7)] {
+            let report = executor
+                .execute_static_scalar_method_at(0, TEST_CLASS, "identity", &[input])
+                .expect("execute another root method with the existing index");
+            assert_eq!(report.execution.return_value, EngineReturn::Int(expected));
+        }
+    }
+
+    #[test]
     fn executes_static_call_range_encoding() {
         let bytes = build_dex(&[
             TestMethod {
