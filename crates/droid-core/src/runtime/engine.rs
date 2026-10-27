@@ -2,10 +2,10 @@
 //!
 //! This is an early runtime component, not Android Runtime (ART) and not a
 //! complete Android application environment. It executes only a bounded subset
-//! of DEX instructions over 32-bit integer registers. Same-DEX static calls
-//! between integer/void methods are supported with bounded depth and a shared
-//! instruction budget. Objects, fields, arrays, exceptions, Android framework
-//! APIs, native libraries, and graphics are still unsupported.
+//! of DEX instructions over 32-bit integer registers. Bounded static calls
+//! between scalar/void methods are supported across loaded DEX files, with
+//! bounded depth and a shared instruction budget. Objects, fields, arrays,
+//! exceptions, Android framework APIs, native libraries, and graphics are still unsupported.
 //!
 //! The input is a parsed CodeItem. It must have no try/catch table and must
 //! use only instructions listed in IntegerDexEngine's implementation.
@@ -554,6 +554,7 @@ fn find_encoded_method(
         .map_err(|error| static_call_failed(method_idx, error))?;
 
     // Prefer the caller's own DEX, then search the remaining APK DEX files.
+    let mut declaration_without_code = false;
     let candidates = std::iter::once(caller_dex_index)
         .chain((0..dexes.len()).filter(|candidate| *candidate != caller_dex_index));
     for dex_index in candidates {
@@ -579,16 +580,26 @@ fn find_encoded_method(
                 let candidate_signature = dex
                     .method_signature(method.method_idx)
                     .map_err(|error| static_call_failed(method_idx, error))?;
-                if candidate_signature == signature && method.code_off != 0 {
-                    return Ok((dex_index, *method, signature));
+                if candidate_signature == signature {
+                    if method.code_off != 0 {
+                        return Ok((dex_index, *method, signature));
+                    }
+                    declaration_without_code = true;
                 }
             }
         }
     }
-    Err(static_call_failed(
-        method_idx,
-        "method definition was not found in any loaded DEX file (external/framework code or missing DEX dependency)",
-    ))
+    let method_label = method_signature_label(&signature);
+    let reason = if declaration_without_code {
+        format!(
+            "method {method_label} is declared in loaded DEX metadata but has no code item (native/abstract/external methods are unsupported)"
+        )
+    } else {
+        format!(
+            "definition for {method_label} was not found in any loaded DEX file (external/framework code or missing DEX dependency)"
+        )
+    };
+    Err(static_call_failed(method_idx, reason))
 }
 
 fn static_call_failed(method_idx: u32, error: impl fmt::Display) -> EngineError {
@@ -1766,6 +1777,20 @@ mod tests {
             outs: 0,
             insns: vec![0x0090, 0x0201, 0x000f], // add-int v0, v1, v2; return v0
         }]);
+
+        let missing_caller = DexFile::parse(&caller_bytes, &crate::dex::DexLimits::default())
+            .expect("parse caller DEX for missing-callee diagnostic");
+        let missing_callee_error = execute_static_scalar_method_in_dex_set(
+            std::slice::from_ref(&missing_caller),
+            TEST_CLASS,
+            "caller",
+            &[19, 23],
+        )
+        .expect_err("refuse a callee whose definition is not loaded");
+        assert!(
+            missing_callee_error.to_string().contains("->sum(I,I)I"),
+            "diagnostic should include the missing callee signature: {missing_callee_error}"
+        );
 
         let caller = DexFile::parse(&caller_bytes, &crate::dex::DexLimits::default())
             .expect("parse caller DEX");
