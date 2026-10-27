@@ -1798,10 +1798,7 @@ mod tests {
             parameter_types: vec!["I".to_owned()],
             return_type: "I".to_owned(),
         };
-        assert_eq!(
-            api30_window_insets_type_intrinsic(&wrong_arity, &[0]),
-            None
-        );
+        assert_eq!(api30_window_insets_type_intrinsic(&wrong_arity, &[0]), None);
     }
 
     #[test]
