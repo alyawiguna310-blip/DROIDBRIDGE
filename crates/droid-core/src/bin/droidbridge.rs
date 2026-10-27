@@ -9,8 +9,8 @@ use droid_core::apk::{ApkLimits, ApkReport, inspect_file, read_dex_entry};
 use droid_core::dex::{CodeItem, DexFile, DexLimits};
 use droid_core::launcher::launch_verified_apk;
 use droid_core::runtime::engine::{
-    EngineReturn, IntegerDexEngine, execute_static_scalar_method,
-    execute_static_scalar_method_in_dex_set, list_static_scalar_methods,
+    EngineReturn, IntegerDexEngine, execute_static_scalar_method_in_dex_set,
+    execute_static_scalar_method_in_dex_set_at, list_static_scalar_methods,
 };
 use droid_core::runtime::{
     LaunchRequest, RuntimeBackend, RuntimeSession, RuntimeSessionState, waydroid::WaydroidBackend,
@@ -419,13 +419,7 @@ fn run_method(
     let limits = ApkLimits::default();
     let mut buffers = Vec::new();
     let mut entry_names = Vec::new();
-    let dexes = load_dex_bundle_from_apk(
-        apk,
-        dex_entry,
-        &limits,
-        &mut buffers,
-        &mut entry_names,
-    )?;
+    let dexes = load_dex_bundle_from_apk(apk, dex_entry, &limits, &mut buffers, &mut entry_names)?;
     let root_dex_index = entry_names
         .iter()
         .position(|name| name == dex_entry)
