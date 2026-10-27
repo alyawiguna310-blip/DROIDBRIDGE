@@ -132,7 +132,7 @@ pub fn list_static_integer_methods(
     let mut found = Vec::new();
     for class in dex.class_defs() {
         let class_descriptor = dex.type_descriptor(class.class_idx)?;
-        if class_filter.is_some_and(|filter| filter != class_descriptor) {
+        if class_filter.is_some_and(|filter| filter != class_descriptor.as_str()) {
             continue;
         }
         let Some(data) = dex.class_data(class)? else {
@@ -199,7 +199,7 @@ pub fn execute_static_integer_method(
     }
 
     let static_methods: Vec<_> = same_name
-        .iter()
+        .into_iter()
         .filter(|(method, _)| method.access_flags & 0x8 != 0)
         .collect();
     if static_methods.is_empty() {
