@@ -9,7 +9,8 @@ use droid_core::apk::{ApkLimits, ApkReport, inspect_file, read_dex_entry};
 use droid_core::dex::{CodeItem, DexFile, DexLimits};
 use droid_core::launcher::launch_verified_apk;
 use droid_core::runtime::engine::{
-    EngineReturn, IntegerDexEngine, execute_static_scalar_method, list_static_scalar_methods,
+    EngineReturn, IntegerDexEngine, execute_static_scalar_method, execute_static_scalar_method_in_dex_set,
+    list_static_scalar_methods,
 };
 use droid_core::runtime::{
     LaunchRequest, RuntimeBackend, RuntimeSession, RuntimeSessionState, waydroid::WaydroidBackend,
@@ -257,6 +258,52 @@ fn load_dex_from_apk<'a>(
     Ok(DexFile::parse(bytes.as_slice(), &dex_limits)?)
 }
 
+/// Load every DEX entry that passed APK inspection so method-call resolution can
+/// look up definitions declared outside the selected entry. The byte buffers
+/// are owned by the caller and outlive the parsed DexFile views.
+fn load_dex_bundle_from_apk<'a>(
+    apk: &std::path::Path,
+    requested_entry: &str,
+    limits: &ApkLimits,
+    buffers: &'a mut Vec<Vec<u8>>,
+    entry_names: &mut Vec<String>,
+) -> Result<Vec<DexFile<'a>>, Box<dyn Error>> {
+    let report = inspect_file(apk, limits)?;
+    if !report
+        .dex_files
+        .iter()
+        .any(|entry| entry.entry_name == requested_entry)
+    {
+        return Err(
+            io::Error::other(format!("DEX entry {requested_entry:?} was not found in the APK"))
+                .into(),
+        );
+    }
+
+    buffers.clear();
+    entry_names.clear();
+    for entry in report.dex_files.iter().filter(|entry| entry.outcome.is_ok()) {
+        buffers.push(read_dex_entry(apk, &entry.entry_name, limits)?);
+        entry_names.push(entry.entry_name.clone());
+    }
+
+    if !entry_names.iter().any(|name| name == requested_entry) {
+        return Err(io::Error::other(format!(
+            "requested DEX entry {requested_entry:?} did not pass DEX validation"
+        ))
+        .into());
+    }
+
+    let dex_limits = DexLimits {
+        max_file_size: usize::try_from(limits.max_dex_size).unwrap_or(usize::MAX),
+    };
+    let mut dexes = Vec::with_capacity(buffers.len());
+    for bytes in buffers.iter() {
+        dexes.push(DexFile::parse(bytes.as_slice(), &dex_limits)?);
+    }
+    Ok(dexes)
+}
+
 fn list_methods(
     apk: &std::path::Path,
     dex_entry: &str,
@@ -295,9 +342,20 @@ fn probe_methods(
 ) -> Result<(), Box<dyn Error>> {
     const MAX_PROBE_METHODS: usize = 20;
     let limits = ApkLimits::default();
-    let mut bytes = Vec::new();
-    let dex = load_dex_from_apk(apk, dex_entry, &limits, &mut bytes)?;
-    let candidates = list_static_scalar_methods(&dex, class_filter)?;
+    let mut buffers = Vec::new();
+    let mut entry_names = Vec::new();
+    let dexes = load_dex_bundle_from_apk(
+        apk,
+        dex_entry,
+        &limits,
+        &mut buffers,
+        &mut entry_names,
+    )?;
+    let root_dex_index = entry_names
+        .iter()
+        .position(|name| name == dex_entry)
+        .expect("requested DEX was validated and loaded");
+    let candidates = list_static_scalar_methods(&dexes[root_dex_index], class_filter)?;
     let attempts = candidates.len().min(MAX_PROBE_METHODS);
 
     println!(
@@ -312,8 +370,8 @@ fn probe_methods(
     let mut refused = 0usize;
     for signature in candidates.iter().take(attempts) {
         let parameters = vec![0; signature.parameter_types.len()];
-        match execute_static_scalar_method(
-            &dex,
+        match execute_static_scalar_method_in_dex_set(
+            &dexes,
             &signature.class_descriptor,
             &signature.name,
             &parameters,
@@ -360,9 +418,21 @@ fn run_method(
     parameters: &[i32],
 ) -> Result<(), Box<dyn Error>> {
     let limits = ApkLimits::default();
-    let mut bytes = Vec::new();
-    let dex = load_dex_from_apk(apk, dex_entry, &limits, &mut bytes)?;
-    let report = execute_static_scalar_method(&dex, class_descriptor, method_name, parameters)?;
+    let mut buffers = Vec::new();
+    let mut entry_names = Vec::new();
+    let dexes = load_dex_bundle_from_apk(
+        apk,
+        dex_entry,
+        &limits,
+        &mut buffers,
+        &mut entry_names,
+    )?;
+    let report = execute_static_scalar_method_in_dex_set(
+        &dexes,
+        class_descriptor,
+        method_name,
+        parameters,
+    )?;
     println!(
         "method: {}->{}({}){}",
         report.signature.class_descriptor,
