@@ -49,19 +49,54 @@ pub struct ExecutionReport {
 /// A refusal or failure from the project-owned integer DEX engine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EngineError {
-    CodeTooLarge { size: usize, max: usize },
-    InstructionStepLimitExceeded { max: u64 },
+    CodeTooLarge {
+        size: usize,
+        max: usize,
+    },
+    InstructionStepLimitExceeded {
+        max: u64,
+    },
     TryCatchUnsupported,
-    InvalidRegisterLayout { registers_size: u16, ins_size: u16 },
-    ParameterCountMismatch { expected: usize, actual: usize },
-    TruncatedInstruction { pc: usize, width: usize, remaining: usize },
-    UnsupportedOpcode { pc: usize, opcode: u8 },
-    InvalidInstructionEncoding { pc: usize, word: u16 },
-    InvalidRegister { pc: usize, register: usize, register_count: usize },
-    InvalidBranchTarget { pc: usize, target: i64 },
-    BranchToNonInstruction { pc: usize, target: usize },
-    DivisionByZero { pc: usize },
-    MissingReturn { pc: usize },
+    InvalidRegisterLayout {
+        registers_size: u16,
+        ins_size: u16,
+    },
+    ParameterCountMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    TruncatedInstruction {
+        pc: usize,
+        width: usize,
+        remaining: usize,
+    },
+    UnsupportedOpcode {
+        pc: usize,
+        opcode: u8,
+    },
+    InvalidInstructionEncoding {
+        pc: usize,
+        word: u16,
+    },
+    InvalidRegister {
+        pc: usize,
+        register: usize,
+        register_count: usize,
+    },
+    InvalidBranchTarget {
+        pc: usize,
+        target: i64,
+    },
+    BranchToNonInstruction {
+        pc: usize,
+        target: usize,
+    },
+    DivisionByZero {
+        pc: usize,
+    },
+    MissingReturn {
+        pc: usize,
+    },
 }
 
 impl fmt::Display for EngineError {
@@ -76,7 +111,10 @@ impl fmt::Display for EngineError {
             Self::TryCatchUnsupported => {
                 f.write_str("DEX methods with try/catch tables are not supported")
             }
-            Self::InvalidRegisterLayout { registers_size, ins_size } => write!(
+            Self::InvalidRegisterLayout {
+                registers_size,
+                ins_size,
+            } => write!(
                 f,
                 "invalid DEX register layout: {ins_size} input registers exceed {registers_size} total registers"
             ),
@@ -84,7 +122,11 @@ impl fmt::Display for EngineError {
                 f,
                 "DEX method expects {expected} 32-bit integer parameters, received {actual}"
             ),
-            Self::TruncatedInstruction { pc, width, remaining } => write!(
+            Self::TruncatedInstruction {
+                pc,
+                width,
+                remaining,
+            } => write!(
                 f,
                 "truncated DEX instruction at code unit {pc}: needs {width} units, {remaining} remain"
             ),
@@ -95,7 +137,11 @@ impl fmt::Display for EngineError {
                 f,
                 "invalid DEX instruction encoding 0x{word:04x} at code unit {pc}"
             ),
-            Self::InvalidRegister { pc, register, register_count } => write!(
+            Self::InvalidRegister {
+                pc,
+                register,
+                register_count,
+            } => write!(
                 f,
                 "DEX instruction at code unit {pc} accesses register v{register}, but only {register_count} registers exist"
             ),
@@ -111,7 +157,10 @@ impl fmt::Display for EngineError {
                 write!(f, "integer division by zero at code unit {pc}")
             }
             Self::MissingReturn { pc } => {
-                write!(f, "DEX method reached code unit {pc} without a return instruction")
+                write!(
+                    f,
+                    "DEX method reached code unit {pc} without a return instruction"
+                )
             }
         }
     }
@@ -250,7 +299,8 @@ impl IntegerDexEngine {
                 0x14 => {
                     let dest = usize::from(word >> 8);
                     let value = (u32::from(code.insns[pc + 1])
-                        | (u32::from(code.insns[pc + 2]) << 16)) as i32;
+                        | (u32::from(code.insns[pc + 2]) << 16))
+                        as i32;
                     write_register(&mut registers, dest, value, pc)?;
                 }
                 0x15 => {
@@ -387,11 +437,7 @@ fn decode_program(code: &[u16]) -> Result<Vec<Option<DecodedInstruction>>, Engin
     Ok(program)
 }
 
-fn read_register(
-    registers: &[i32],
-    register: usize,
-    pc: usize,
-) -> Result<i32, EngineError> {
+fn read_register(registers: &[i32], register: usize, pc: usize) -> Result<i32, EngineError> {
     registers
         .get(register)
         .copied()
@@ -528,7 +574,10 @@ mod tests {
     fn sign_extends_const_four_bit_literals() {
         // const/4 v0, -1; return v0
         let method = code(1, 0, &[0xf012, 0x000f]);
-        assert_eq!(run(&method, &[]).unwrap().return_value, EngineReturn::Int(-1));
+        assert_eq!(
+            run(&method, &[]).unwrap().return_value,
+            EngineReturn::Int(-1)
+        );
     }
 
     #[test]
@@ -540,14 +589,20 @@ mod tests {
             0,
             &[0x1012, 0x1112, 0x1032, 4, 0x2212, 0x020f, 0x3212, 0x020f],
         );
-        assert_eq!(run(&method, &[]).unwrap().return_value, EngineReturn::Int(3));
+        assert_eq!(
+            run(&method, &[]).unwrap().return_value,
+            EngineReturn::Int(3)
+        );
     }
 
     #[test]
     fn handles_two_address_arithmetic() {
         // const/4 v0, 5; const/4 v1, 6; add-int/2addr v0, v1; return v0
         let method = code(2, 0, &[0x5012, 0x6112, 0x10b0, 0x000f]);
-        assert_eq!(run(&method, &[]).unwrap().return_value, EngineReturn::Int(11));
+        assert_eq!(
+            run(&method, &[]).unwrap().return_value,
+            EngineReturn::Int(11)
+        );
     }
 
     #[test]
@@ -588,7 +643,10 @@ mod tests {
         let method = code(0, 0, &[0x0071, 0x000e]); // invoke-static is unsupported
         assert_eq!(
             run(&method, &[]),
-            Err(EngineError::UnsupportedOpcode { pc: 0, opcode: 0x71 })
+            Err(EngineError::UnsupportedOpcode {
+                pc: 0,
+                opcode: 0x71
+            })
         );
     }
 
