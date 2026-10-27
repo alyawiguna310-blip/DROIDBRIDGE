@@ -1344,16 +1344,44 @@ impl IntegerDexEngine {
                 0x32..=0x37 => {
                     let left_reg = usize::from((word >> 8) & 0x0f);
                     let right_reg = usize::from((word >> 12) & 0x0f);
-                    let left = read_register(&registers, left_reg, pc)?;
-                    let right = read_register(&registers, right_reg, pc)?;
-                    if compare(instruction.opcode, left, right) {
+                    let left = registers
+                        .get(left_reg)
+                        .copied()
+                        .ok_or(EngineError::InvalidRegister {
+                            pc,
+                            register: left_reg,
+                            register_count: registers.len(),
+                        })?;
+                    let right = registers
+                        .get(right_reg)
+                        .copied()
+                        .ok_or(EngineError::InvalidRegister {
+                            pc,
+                            register: right_reg,
+                            register_count: registers.len(),
+                        })?;
+                    if compare_register_values(
+                        instruction.opcode,
+                        left,
+                        right,
+                        left_reg,
+                        right_reg,
+                        pc,
+                    )? {
                         next_pc = instruction.branch_target.expect("if target is decoded");
                     }
                 }
                 0x38..=0x3d => {
                     let register = usize::from(word >> 8);
-                    let value = read_register(&registers, register, pc)?;
-                    if compare_zero(instruction.opcode, value) {
+                    let value = registers
+                        .get(register)
+                        .copied()
+                        .ok_or(EngineError::InvalidRegister {
+                            pc,
+                            register,
+                            register_count: registers.len(),
+                        })?;
+                    if compare_register_zero(instruction.opcode, value, register, pc)? {
                         next_pc = instruction.branch_target.expect("if target is decoded");
                     }
                 }
@@ -1680,6 +1708,108 @@ fn compare_zero(opcode: u8, value: i32) -> bool {
         0x3c => value > 0,
         0x3d => value <= 0,
         _ => false,
+    }
+}
+
+fn is_reference_value(value: RegisterValue) -> bool {
+    matches!(
+        value,
+        RegisterValue::NullReference | RegisterValue::ObjectReference { .. }
+    )
+}
+
+fn compare_register_values(
+    opcode: u8,
+    left: RegisterValue,
+    right: RegisterValue,
+    left_reg: usize,
+    right_reg: usize,
+    pc: usize,
+) -> Result<bool, EngineError> {
+    if opcode == 0x32 || opcode == 0x33 {
+        let left_is_reference = is_reference_value(left);
+        let right_is_reference = is_reference_value(right);
+        let left_zero_as_null = matches!(left, RegisterValue::Int(0)) && right_is_reference;
+        let right_zero_as_null = matches!(right, RegisterValue::Int(0)) && left_is_reference;
+
+        let equal = if left_zero_as_null || right_zero_as_null
+            || (left_is_reference && right_is_reference)
+        {
+            let left_is_null = matches!(left, RegisterValue::NullReference | RegisterValue::Int(0));
+            let right_is_null =
+                matches!(right, RegisterValue::NullReference | RegisterValue::Int(0));
+            match (left_is_null, right_is_null) {
+                (true, true) => true,
+                (false, false) => match (left, right) {
+                    (
+                        RegisterValue::ObjectReference { object_id: left_id, .. },
+                        RegisterValue::ObjectReference { object_id: right_id, .. },
+                    ) => left_id == right_id,
+                    _ => false,
+                },
+                _ => false,
+            }
+        } else {
+            match (left, right) {
+                (RegisterValue::Int(left), RegisterValue::Int(right)) => left == right,
+                _ => {
+                    let (register, actual) = if !matches!(left, RegisterValue::Int(_)) {
+                        (left_reg, left.kind_name())
+                    } else {
+                        (right_reg, right.kind_name())
+                    };
+                    return Err(EngineError::RegisterTypeMismatch {
+                        pc,
+                        register,
+                        expected: "matching integer or reference values",
+                        actual,
+                    });
+                }
+            }
+        };
+        return Ok(if opcode == 0x32 { equal } else { !equal });
+    }
+
+    match (left, right) {
+        (RegisterValue::Int(left), RegisterValue::Int(right)) => {
+            Ok(compare(opcode, left, right))
+        }
+        _ => {
+            let (register, actual) = if !matches!(left, RegisterValue::Int(_)) {
+                (left_reg, left.kind_name())
+            } else {
+                (right_reg, right.kind_name())
+            };
+            Err(EngineError::RegisterTypeMismatch {
+                pc,
+                register,
+                expected: "integer operands for ordered comparison",
+                actual,
+            })
+        }
+    }
+}
+
+fn compare_register_zero(
+    opcode: u8,
+    value: RegisterValue,
+    register: usize,
+    pc: usize,
+) -> Result<bool, EngineError> {
+    match value {
+        RegisterValue::Int(value) => Ok(compare_zero(opcode, value)),
+        RegisterValue::NullReference if opcode == 0x38 => Ok(true),
+        RegisterValue::NullReference if opcode == 0x39 => Ok(false),
+        RegisterValue::ObjectReference { .. } if opcode == 0x38 => Ok(false),
+        RegisterValue::ObjectReference { .. } if opcode == 0x39 => Ok(true),
+        reference @ (RegisterValue::NullReference | RegisterValue::ObjectReference { .. }) => {
+            Err(EngineError::RegisterTypeMismatch {
+                pc,
+                register,
+                expected: "integer for ordered zero comparison, or reference for if-eqz/if-nez",
+                actual: reference.kind_name(),
+            })
+        }
     }
 }
 
@@ -2452,6 +2582,47 @@ mod tests {
                 .execution
                 .return_value,
             EngineReturn::Int(-1)
+        );
+    }
+
+    #[test]
+    fn branches_on_non_null_symbolic_object_reference() {
+        let bytes = build_dex(&[TestMethod {
+            name: "isNonNull",
+            return_type: "I",
+            params: vec![],
+            registers: 2,
+            ins: 0,
+            outs: 0,
+            // new-instance v0, type@0; if-nez v0, +5; return 0; return 1.
+            insns: vec![0x0022, 0x0000, 0x0039, 5, 0x0113, 0, 0x010f, 0x0113, 1, 0x010f],
+        }]);
+        let dex =
+            DexFile::parse(&bytes, &crate::dex::DexLimits::default()).expect("parse synthetic DEX");
+        let report = execute_static_scalar_method(&dex, TEST_CLASS, "isNonNull", &[])
+            .expect("execute if-nez on symbolic object");
+        assert_eq!(report.execution.return_value, EngineReturn::Int(1));
+        assert_eq!(report.execution.instruction_steps, 4);
+    }
+
+    #[test]
+    fn branches_on_null_reference_after_move_object() {
+        let method = code(
+            2,
+            0,
+            &[
+                0x0012, // const/4 v0, 0
+                0x0107, // move-object v1, v0 (zero is null in reference context)
+                0x0138, 5, // if-eqz v1, +5
+                0x0113, 0, // const/16 v1, 0
+                0x010f, // return v1
+                0x0113, 1, // const/16 v1, 1
+                0x010f, // return v1
+            ],
+        );
+        assert_eq!(
+            run(&method, &[]).map(|report| report.return_value),
+            Ok(EngineReturn::Int(1))
         );
     }
 
