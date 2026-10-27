@@ -898,8 +898,7 @@ fn decode_program(
         let width = match opcode {
             0x00 if word == 0 => 1,
             0x00 => return Err(EngineError::UnsupportedOpcode { pc, opcode }),
-            0x01 | 0x0e | 0x0f | 0x12 | 0x28 | 0x7b..=0x7c | 0x8d..=0x8f
-            | 0xb0..=0xba => 1,
+            0x01 | 0x0e | 0x0f | 0x12 | 0x28 | 0x7b..=0x7c | 0x8d..=0x8f | 0xb0..=0xba => 1,
             0x0a if allow_static_calls => 1,
             0x02 | 0x13 | 0x15 | 0x29 | 0x32..=0x3d | 0x90..=0x9a | 0xd0..=0xe2 => 2,
             0x03 | 0x14 | 0x2a => 3,
@@ -1174,15 +1173,7 @@ mod tests {
                 )
             } else {
                 let literal_and_register = 0x0501;
-                code(
-                    2,
-                    1,
-                    &[
-                        u16::from(opcode),
-                        literal_and_register,
-                        0x000f,
-                    ],
-                )
+                code(2, 1, &[u16::from(opcode), literal_and_register, 0x000f])
             };
             let result = run(&method, &[10]);
             assert_eq!(
