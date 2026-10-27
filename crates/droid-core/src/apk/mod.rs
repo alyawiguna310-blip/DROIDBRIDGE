@@ -40,7 +40,7 @@ pub(crate) mod testutil;
 pub use error::{ApkError, UnsafeEntryReason};
 pub use inspect::{
     ApkLimits, ApkReport, ApkWarning, DexEntryError, DexEntryReport, DexSummary, MANIFEST_ENTRY,
-    NativeLibrary, inspect_bytes, inspect_file, inspect_reader,
+    NativeLibrary, inspect_bytes, inspect_file, inspect_reader, read_dex_entry,
 };
 pub use manifest::{
     Component, ManifestError, ManifestInfo, ManifestValue, SdkVersion, parse_manifest,
