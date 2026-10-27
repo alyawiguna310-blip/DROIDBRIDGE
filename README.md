@@ -111,7 +111,7 @@ let code = CodeItem {
     debug_info_off: 0,
     insns: vec![0x0013, 7, 0x0113, 35, 0x0290, 0x0100, 0x020f],
 };
-let result = IntegerDexEngine::default().execute(&code, [])?;
+let result = IntegerDexEngine::default().execute(&code, &[])?;
 assert_eq!(result.return_value, EngineReturn::Int(42));
 # Ok::<(), droid_core::runtime::engine::EngineError>(())
 ```
@@ -132,11 +132,13 @@ Run the CLI from the workspace root:
 cargo run -p droid-core --bin droidbridge -- help
 cargo run -p droid-core --bin droidbridge -- inspect "/path/to/app.apk"
 cargo run -p droid-core --bin droidbridge -- status
+cargo run -p droid-core --bin droidbridge -- engine-demo
 cargo run -p droid-core --bin droidbridge -- launch "/path/to/app.apk" com.example.app POCO_F6
 ```
 
 - `inspect` prints the parsed manifest metadata, permissions, DEX parse results, native-library names, and warnings. It does not install or execute the APK.
 - `status` probes the existing Waydroid environment and prints the adapter's declared capabilities.
+- `engine-demo` executes a synthetic integer DEX method entirely in DROIDBRIDGE's own engine and should print `return: 42`; it does not need Waydroid.
 - `launch` runs the verified preflight before delegating to Waydroid, then waits for the target process to be observed. The package name must exactly match the APK manifest. If omitted, the profile id defaults to `POCO_F6`.
 
 The CLI does not install or initialize Waydroid, start its session, apply device-identity spoofing, or prove general app compatibility. The profile id is currently carried as launch-request metadata only. A real launch has not yet been verified on a live Waydroid installation.
