@@ -93,7 +93,10 @@ impl fmt::Display for ApkError {
             Self::DuplicateEntry { name } => write!(f, "duplicate archive entry {name:?}"),
             Self::MissingEntry { name } => write!(f, "required entry {name} is missing"),
             Self::NotDexEntry { name } => {
-                write!(f, "archive entry {name:?} is not a recognized top-level DEX entry")
+                write!(
+                    f,
+                    "archive entry {name:?} is not a recognized top-level DEX entry"
+                )
             }
             Self::MissingDexEntry { name } => {
                 write!(f, "DEX entry {name:?} is missing from the archive")
