@@ -1486,7 +1486,8 @@ mod tests {
 
     #[test]
     fn shares_instruction_step_budget_across_static_calls() {
-        let caller = code(3, 2, &[0x0271, 0x0000, 0x0021, 0x000a, 0x000f]);
+        let mut caller = code(3, 2, &[0x0271, 0x0000, 0x0021, 0x000a, 0x000f]);
+        caller.outs_size = 2;
         let callee = code(3, 2, &[0x0090, 0x0201, 0x000f]);
         let engine = IntegerDexEngine::new(EngineLimits {
             max_code_units: 8,
