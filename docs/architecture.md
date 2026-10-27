@@ -31,6 +31,7 @@ The scaffold does not emulate a CPU, execute DEX, implement ART, render Android 
 - `registry` — `ProfileRegistry`: in-memory store of validated profiles keyed by id, with an explicit active-profile selection.
 - `errors` — typed errors so callers match on variants instead of parsing strings.
 - `runtime` — adapter interfaces, capability declarations, validated launch requests, typed errors, and app-session lifecycle contracts. `runtime::waydroid::WaydroidBackend` is an initial Linux adapter around the documented Waydroid CLI; it has mocked-command tests but has not been tested against a live Waydroid installation.
+- `launcher` — verified launch preflight: inspect the APK, match the manifest package, require backend readiness and explicitly supported install/launch capabilities, then invoke the adapter.
 - `dex` — bounds-checked DEX parser (header, id tables, class data, code items). Parsing only; see "DEX parsing" below.
 - `apk` — APK inspection (archive, binary manifest, DEX discovery, native library names). Inspection only; see "APK inspection" below.
 
@@ -54,6 +55,18 @@ The `runtime` module specifies the boundary between the portable core and an ind
 - `RuntimeSession` provides state polling and a stop request. Typed `RuntimeError` variants allow frontends to handle failures without parsing human-readable messages.
 
 The Waydroid adapter requires Waydroid to be installed and initialized and its user session/container to be running before launch. It does not automatically install or initialize Waydroid, start the session, inspect the APK manifest, verify that the supplied package name matches the APK, or apply the selected device-profile identity. It uses Waydroid's documented CLI for status, APK install, app launch, process polling, and force-stop. The adapter contract does not itself provide Android framework services or execute DEX, and command success does not guarantee an arbitrary app will run. A live test with a harmless test APK is still required.
+
+## Verified APK launch preflight
+
+The public `launch_verified_apk` orchestration function creates a narrow pre-install gate between the APK inspector and a backend adapter:
+
+1. Inspect the APK using caller-supplied resource limits.
+2. Require an exact match between the manifest package and the launch request.
+3. Require the backend readiness probe to return `BackendStatus::Ready`.
+4. Require the backend to explicitly report both APK installation and launch as `CapabilitySupport::Supported`. `Unknown` is not treated as permission to proceed.
+5. Only then invoke the adapter's launch method, returning both the APK report and the runtime session handle.
+
+The preflight prevents an accidental manifest/request package mismatch and stops before backend launch when inspection, readiness, or capability checks fail. It does not sandbox APK code, check every app-level compatibility condition, apply device-profile spoofing, or guarantee that the Android runtime can run an app. Live Waydroid testing remains necessary.
 
 ## DEX parsing
 
@@ -92,7 +105,7 @@ The balanced preset should prefer on-demand runtime startup, avoid duplicate ser
 2. DEX parsing and APK archive inspection with binary manifest parsing (done, unexecuted).
 3. DEX instruction decoding and a minimal interpreter.
 4. Runtime adapter interface and backend capability report (contract plus initial Waydroid CLI adapter implemented; not live-validated).
-5. Launch a real test APK through a selected runtime (not yet verified).
+5. Verify an APK and pass launch requests through a ready runtime backend (preflight implemented; live APK execution not yet verified).
 6. Validate graphics acceleration, input, lifecycle and app isolation.
 7. Evaluate ARM64 native library support.
 8. Evaluate Google Play services using a compatible, properly licensed distribution path.
