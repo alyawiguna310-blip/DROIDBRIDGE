@@ -229,28 +229,54 @@ pub fn list_static_integer_methods(
 
 /// Resolve and execute a static scalar method from a parsed DEX file.
 ///
-/// Only methods returning int, boolean, byte, short, or char and taking zero
-/// or more of those scalar argument types are accepted. Each supplied
-/// parameter is normalized to the declared type width. Object/reference
-/// parameters, wide values, and general Android runtime behavior remain
-/// outside this engine's scope. Unsupported instructions and try/catch tables
-/// are rejected by the bounded interpreter.
+/// This single-DEX convenience API rejects calls whose definitions are not in
+/// the supplied DEX. Use execute_static_scalar_method_in_dex_set when the APK
+/// contains multiple DEX files.
 pub fn execute_static_scalar_method(
     dex: &DexFile<'_>,
     class_descriptor: &str,
     method_name: &str,
     parameters: &[i32],
 ) -> Result<MethodExecutionReport, MethodExecutionError> {
+    execute_static_scalar_method_in_dex_set(
+        std::slice::from_ref(dex),
+        class_descriptor,
+        method_name,
+        parameters,
+    )
+}
+
+/// Resolve and execute a scalar method with method definitions available across
+/// a set of DEX files from the same APK.
+///
+/// Method indices are resolved in the caller's DEX first, then the resulting
+/// full signature is matched against actual method definitions in the loaded
+/// DEX set. This permits calls between classes.dex, classes2.dex, and later
+/// files without pretending that method indices are shared between DEX files.
+/// Scalar int, boolean, byte, short, and char values occupy one 32-bit register
+/// and are normalized at method boundaries.
+pub fn execute_static_scalar_method_in_dex_set(
+    dexes: &[DexFile<'_>],
+    class_descriptor: &str,
+    method_name: &str,
+    parameters: &[i32],
+) -> Result<MethodExecutionReport, MethodExecutionError> {
     let mut selected_class = None;
-    for class in dex.class_defs() {
-        if dex.type_descriptor(class.class_idx)? == class_descriptor {
-            selected_class = Some(class);
+    for (dex_index, dex) in dexes.iter().enumerate() {
+        for class in dex.class_defs() {
+            if dex.type_descriptor(class.class_idx)? == class_descriptor {
+                selected_class = Some((dex_index, class));
+                break;
+            }
+        }
+        if selected_class.is_some() {
             break;
         }
     }
-    let class = selected_class.ok_or_else(|| MethodExecutionError::ClassNotFound {
+    let (dex_index, class) = selected_class.ok_or_else(|| MethodExecutionError::ClassNotFound {
         class_descriptor: class_descriptor.to_owned(),
     })?;
+    let dex = &dexes[dex_index];
     let Some(data) = dex.class_data(class)? else {
         return Err(MethodExecutionError::MethodNotFound {
             class_descriptor: class_descriptor.to_owned(),
@@ -266,7 +292,7 @@ pub fn execute_static_scalar_method(
     {
         let signature = dex.method_signature(method.method_idx)?;
         if signature.name == method_name {
-            same_name.push((*method, signature));
+            same_name.push((dex_index, *method, signature));
         }
     }
     if same_name.is_empty() {
@@ -278,7 +304,7 @@ pub fn execute_static_scalar_method(
 
     let static_methods: Vec<_> = same_name
         .into_iter()
-        .filter(|(method, _)| method.access_flags & 0x8 != 0)
+        .filter(|(_, method, _)| method.access_flags & 0x8 != 0)
         .collect();
     if static_methods.is_empty() {
         return Err(MethodExecutionError::MethodIsNotStatic {
@@ -289,14 +315,14 @@ pub fn execute_static_scalar_method(
 
     let mut expected: Vec<usize> = static_methods
         .iter()
-        .map(|(_, signature)| signature.parameter_types.len())
+        .map(|(_, _, signature)| signature.parameter_types.len())
         .collect();
     expected.sort_unstable();
     expected.dedup();
 
     let matching_arity: Vec<_> = static_methods
         .into_iter()
-        .filter(|(_, signature)| signature.parameter_types.len() == parameters.len())
+        .filter(|(_, _, signature)| signature.parameter_types.len() == parameters.len())
         .collect();
     if matching_arity.is_empty() {
         return Err(MethodExecutionError::ArgumentCountMismatch {
@@ -309,7 +335,7 @@ pub fn execute_static_scalar_method(
 
     let supported: Vec<_> = matching_arity
         .into_iter()
-        .filter(|(_, signature)| {
+        .filter(|(_, _, signature)| {
             is_int_like_type(&signature.return_type)
                 && signature
                     .parameter_types
@@ -327,13 +353,13 @@ pub fn execute_static_scalar_method(
         });
     }
 
-    let (method, signature) = supported.into_iter().next().expect("one supported match");
+    let (dex_index, method, signature) = supported.into_iter().next().expect("one supported match");
     if method.code_off == 0 {
         return Err(MethodExecutionError::MethodHasNoCode {
             signature: method_signature_label(&signature),
         });
     }
-    let code = dex.code_item(method.code_off)?;
+    let code = dexes[dex_index].code_item(method.code_off)?;
     let engine = IntegerDexEngine::default();
     let mut budget = ExecutionBudget {
         max_steps: engine.limits.max_instruction_steps,
@@ -345,9 +371,18 @@ pub fn execute_static_scalar_method(
         .zip(parameters.iter().copied())
         .map(|(ty, value)| normalize_int_like(ty, value))
         .collect();
-    let mut resolver = |target_method_idx: u32, arguments: &[i32], budget: &mut ExecutionBudget| {
-        execute_dex_method_index(dex, target_method_idx, arguments, &engine, budget, 1)
-    };
+    let mut resolver =
+        |target_method_idx: u32, arguments: &[i32], budget: &mut ExecutionBudget| {
+            execute_dex_method_index(
+                dexes,
+                dex_index,
+                target_method_idx,
+                arguments,
+                &engine,
+                budget,
+                1,
+            )
+        };
     let mut execution = engine.execute_with_budget(
         &code,
         &normalized_parameters,
@@ -372,8 +407,8 @@ pub fn execute_static_scalar_method(
     })
 }
 
-/// Backwards-compatible API name; the supported signature set now includes
-/// boolean, byte, short, and char in addition to 32-bit integers.
+/// Backwards-compatible API name; the supported signature set includes scalar
+/// boolean, byte, short, and char values in addition to 32-bit integers.
 pub fn execute_static_integer_method(
     dex: &DexFile<'_>,
     class_descriptor: &str,
@@ -384,7 +419,8 @@ pub fn execute_static_integer_method(
 }
 
 fn execute_dex_method_index(
-    dex: &DexFile<'_>,
+    dexes: &[DexFile<'_>],
+    caller_dex_index: usize,
     method_idx: u32,
     parameters: &[i32],
     engine: &IntegerDexEngine,
@@ -397,7 +433,8 @@ fn execute_dex_method_index(
         });
     }
 
-    let (method, signature) = find_encoded_method(dex, method_idx)?;
+    let (dex_index, method, signature) =
+        find_encoded_method(dexes, caller_dex_index, method_idx)?;
     if method.access_flags & 0x8 == 0 {
         return Err(static_call_failed(
             method_idx,
@@ -433,7 +470,7 @@ fn execute_dex_method_index(
         ));
     }
 
-    let code = dex
+    let code = dexes[dex_index]
         .code_item(method.code_off)
         .map_err(|error| static_call_failed(method_idx, error))?;
     let normalized_parameters: Vec<i32> = signature
@@ -442,9 +479,18 @@ fn execute_dex_method_index(
         .zip(parameters.iter().copied())
         .map(|(ty, value)| normalize_int_like(ty, value))
         .collect();
-    let mut resolver = |child_method_idx: u32, arguments: &[i32], budget: &mut ExecutionBudget| {
-        execute_dex_method_index(dex, child_method_idx, arguments, engine, budget, depth + 1)
-    };
+    let mut resolver =
+        |child_method_idx: u32, arguments: &[i32], budget: &mut ExecutionBudget| {
+            execute_dex_method_index(
+                dexes,
+                dex_index,
+                child_method_idx,
+                arguments,
+                engine,
+                budget,
+                depth + 1,
+            )
+        };
     let report =
         engine.execute_with_budget(&code, &normalized_parameters, budget, Some(&mut resolver))?;
 
@@ -466,37 +512,53 @@ fn execute_dex_method_index(
 }
 
 fn find_encoded_method(
-    dex: &DexFile<'_>,
+    dexes: &[DexFile<'_>],
+    caller_dex_index: usize,
     method_idx: u32,
-) -> Result<(EncodedMethod, MethodSignature), EngineError> {
-    let signature = dex
+) -> Result<(usize, EncodedMethod, MethodSignature), EngineError> {
+    let caller_dex = dexes.get(caller_dex_index).ok_or_else(|| {
+        static_call_failed(method_idx, "caller DEX index is outside the loaded DEX set")
+    })?;
+    let signature = caller_dex
         .method_signature(method_idx)
         .map_err(|error| static_call_failed(method_idx, error))?;
-    for class in dex.class_defs() {
-        let descriptor = dex
-            .type_descriptor(class.class_idx)
-            .map_err(|error| static_call_failed(method_idx, error))?;
-        if descriptor != signature.class_descriptor {
-            continue;
-        }
-        let data = dex
-            .class_data(class)
-            .map_err(|error| static_call_failed(method_idx, error))?;
-        let Some(data) = data else {
-            continue;
-        };
-        if let Some(method) = data
-            .direct_methods
-            .iter()
-            .chain(data.virtual_methods.iter())
-            .find(|method| method.method_idx == method_idx)
-        {
-            return Ok((*method, signature));
+
+    // Prefer the caller's own DEX, then search the remaining APK DEX files.
+    let candidates = std::iter::once(caller_dex_index)
+        .chain(0..dexes.len())
+        .filter(|candidate| *candidate != caller_dex_index);
+    for dex_index in candidates {
+        let dex = &dexes[dex_index];
+        for class in dex.class_defs() {
+            let descriptor = dex
+                .type_descriptor(class.class_idx)
+                .map_err(|error| static_call_failed(method_idx, error))?;
+            if descriptor != signature.class_descriptor {
+                continue;
+            }
+            let data = dex
+                .class_data(class)
+                .map_err(|error| static_call_failed(method_idx, error))?;
+            let Some(data) = data else {
+                continue;
+            };
+            for method in data
+                .direct_methods
+                .iter()
+                .chain(data.virtual_methods.iter())
+            {
+                let candidate_signature = dex
+                    .method_signature(method.method_idx)
+                    .map_err(|error| static_call_failed(method_idx, error))?;
+                if candidate_signature == signature && method.code_off != 0 {
+                    return Ok((dex_index, *method, signature));
+                }
+            }
         }
     }
     Err(static_call_failed(
         method_idx,
-        "method definition is not present in this DEX file",
+        "method definition was not found in any loaded DEX file (external/framework code or missing DEX dependency)",
     ))
 }
 
@@ -1190,7 +1252,7 @@ fn arithmetic(opcode: u8, left: i32, right: i32, pc: usize) -> Result<i32, Engin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dex::testutil::{TEST_CLASS, TestMethod, build_dex};
+    use crate::dex::testutil::{TEST_CLASS, TestMethod, build_dex, fix_checksum};
 
     fn code(registers_size: u16, ins_size: u16, insns: &[u16]) -> CodeItem {
         CodeItem {
@@ -1600,6 +1662,96 @@ mod tests {
             engine.execute_with_budget(&caller, &[19, 23], &mut budget, Some(&mut resolver)),
             Err(EngineError::InstructionStepLimitExceeded { max: 4 })
         );
+    }
+
+    #[test]
+    fn resolves_static_method_definitions_across_loaded_dex_files() {
+        fn read_uleb(bytes: &[u8], cursor: &mut usize) -> u32 {
+            let mut value = 0_u32;
+            let mut shift = 0;
+            loop {
+                let byte = bytes[*cursor];
+                *cursor += 1;
+                value |= u32::from(byte & 0x7f) << shift;
+                if byte & 0x80 == 0 {
+                    return value;
+                }
+                shift += 7;
+            }
+        }
+
+        let mut caller_bytes = build_dex(&[
+            TestMethod {
+                name: "sum",
+                return_type: "I",
+                params: vec!["I", "I"],
+                registers: 3,
+                ins: 2,
+                outs: 0,
+                insns: vec![0x000f], // ID remains as call target; definition removed below
+            },
+            TestMethod {
+                name: "caller",
+                return_type: "I",
+                params: vec!["I", "I"],
+                registers: 3,
+                ins: 2,
+                outs: 2,
+                // invoke-static {v1, v2}, method@0; move-result v0; return v0
+                insns: vec![0x0271, 0x0000, 0x0021, 0x000a, 0x000f],
+            },
+        ]);
+
+        // Keep the method ID for sum in this DEX, but remove its class_data
+        // definition. This models a call target defined in classes2.dex.
+        let class_defs_off =
+            u32::from_le_bytes(caller_bytes[0x64..0x68].try_into().expect("class_defs_off"))
+                as usize;
+        let class_data_off = u32::from_le_bytes(
+            caller_bytes[class_defs_off + 24..class_defs_off + 28]
+                .try_into()
+                .expect("class_data_off"),
+        ) as usize;
+        assert_eq!(caller_bytes[class_data_off + 2], 2);
+        let first_entry = class_data_off + 4;
+        let mut second_entry = first_entry;
+        for _ in 0..3 {
+            read_uleb(&caller_bytes, &mut second_entry);
+        }
+        let second_start = second_entry;
+        for _ in 0..3 {
+            read_uleb(&caller_bytes, &mut second_entry);
+        }
+        let second_record = caller_bytes[second_start..second_entry].to_vec();
+        assert_eq!(second_record.len(), second_start - first_entry);
+        caller_bytes[class_data_off + 2] = 1;
+        caller_bytes[first_entry..second_start].copy_from_slice(&second_record);
+        fix_checksum(&mut caller_bytes);
+
+        let callee_bytes = build_dex(&[TestMethod {
+            name: "sum",
+            return_type: "I",
+            params: vec!["I", "I"],
+            registers: 3,
+            ins: 2,
+            outs: 0,
+            insns: vec![0x0090, 0x0201, 0x000f], // add-int v0, v1, v2; return v0
+        }]);
+
+        let caller = DexFile::parse(&caller_bytes, &crate::dex::DexLimits::default())
+            .expect("parse caller DEX");
+        let callee = DexFile::parse(&callee_bytes, &crate::dex::DexLimits::default())
+            .expect("parse callee DEX");
+
+        let report = execute_static_scalar_method_in_dex_set(
+            &[caller, callee],
+            TEST_CLASS,
+            "caller",
+            &[19, 23],
+        )
+        .expect("resolve callee from a different DEX file");
+        assert_eq!(report.execution.return_value, EngineReturn::Int(42));
+        assert_eq!(report.execution.instruction_steps, 5);
     }
 
     #[test]
