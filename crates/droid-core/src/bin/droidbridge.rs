@@ -191,7 +191,7 @@ where
             "usage: droidbridge methods <apk-path> <dex-entry> [class-descriptor]".to_owned()
         ),
         "run-method" => Err(
-            "usage: droidbridge run-method <apk-path> <dex-entry> <class-descriptor> <method-name> [integer-argument ...]".to_owned()
+            "usage: droidbridge run-method <apk-path> <dex-entry> <class-descriptor> <method-name> [scalar-integer-argument ...]".to_owned()
         ),
         "launch" => {
             Err("usage: droidbridge launch <apk-path> <package-name> [profile-id]".to_owned())
@@ -218,9 +218,9 @@ fn print_usage() {
            inspect      Parse APK metadata without installing or executing it.\n\
            status       Probe the existing Waydroid installation/session.\n\
            engine-demo  Run a synthetic integer method in our own DEX engine.\n\
-           methods      List static int(int, ...) method signature candidates.\n\
-           probe-methods Execute up to 20 candidates with zero integer arguments to measure current engine coverage.\n\
-           run-method   Execute a supported static integer method from actual DEX metadata.\n\
+           methods      List static scalar method candidates (int/boolean/byte/short/char).\n\
+           probe-methods Execute up to 20 candidates with zero-valued scalar arguments to measure current engine coverage.\n\
+           run-method   Execute a supported static scalar method from actual DEX metadata.\n\
            launch       Verify the APK package and backend before delegating launch.\n\n\
          Method execution supports only a small DEX instruction subset; it does not run a whole APK."
     );
@@ -268,15 +268,16 @@ fn list_methods(
     let dex = load_dex_from_apk(apk, dex_entry, &limits, &mut bytes)?;
     let methods = list_static_integer_methods(&dex, class_filter)?;
     println!(
-        "static integer method candidates: {} (metadata signature only; instruction support is checked during execution)",
+        "static scalar method candidates: {} (metadata signature only; instruction support is checked during execution)",
         methods.len()
     );
     for signature in methods.iter().take(MAX_METHODS_TO_PRINT) {
         println!(
-            "{}->{}({})I",
+            "{}->{}({}){}",
             signature.class_descriptor,
             signature.name,
-            signature.parameter_types.join(",")
+            signature.parameter_types.join(","),
+            signature.return_type
         );
     }
     if methods.len() > MAX_METHODS_TO_PRINT {
@@ -300,7 +301,7 @@ fn probe_methods(
     let attempts = candidates.len().min(MAX_PROBE_METHODS);
 
     println!(
-        "probing {attempts} of {} static integer method candidates with zero-valued arguments",
+        "probing {attempts} of {} static scalar method candidates with zero-valued arguments",
         candidates.len()
     );
     println!(
@@ -320,10 +321,11 @@ fn probe_methods(
             Ok(report) => {
                 executed += 1;
                 println!(
-                    "  EXECUTED {}->{}({})I => {:?} ({} total steps including callees)",
+                    "  EXECUTED {}->{}({}){} => {:?} ({} total steps including callees)",
                     signature.class_descriptor,
                     signature.name,
                     signature.parameter_types.join(","),
+                    signature.return_type,
                     report.execution.return_value,
                     report.execution.instruction_steps
                 );
@@ -331,10 +333,11 @@ fn probe_methods(
             Err(error) => {
                 refused += 1;
                 println!(
-                    "  REFUSED  {}->{}({})I: {error}",
+                    "  REFUSED  {}->{}({}){}: {error}",
                     signature.class_descriptor,
                     signature.name,
-                    signature.parameter_types.join(",")
+                    signature.parameter_types.join(","),
+                    signature.return_type
                 );
             }
         }
@@ -361,10 +364,11 @@ fn run_method(
     let dex = load_dex_from_apk(apk, dex_entry, &limits, &mut bytes)?;
     let report = execute_static_integer_method(&dex, class_descriptor, method_name, parameters)?;
     println!(
-        "method: {}->{}({})I",
+        "method: {}->{}({}){}",
         report.signature.class_descriptor,
         report.signature.name,
-        report.signature.parameter_types.join(",")
+        report.signature.parameter_types.join(","),
+        report.signature.return_type
     );
     println!("engine: DROIDBRIDGE IntegerDexEngine");
     println!(
@@ -374,7 +378,7 @@ fn run_method(
     match report.execution.return_value {
         EngineReturn::Int(value) => println!("return: {value}"),
         EngineReturn::Void => {
-            return Err(io::Error::other("integer method unexpectedly returned void").into());
+            return Err(io::Error::other("scalar method unexpectedly returned void").into());
         }
     }
     Ok(())
