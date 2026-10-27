@@ -175,7 +175,8 @@ pub fn list_static_integer_methods(
                 continue;
             }
             let signature = dex.method_signature(method.method_idx)?;
-            if signature.return_type == "I" && signature.parameter_types.iter().all(|ty| ty == "I") {
+            if signature.return_type == "I" && signature.parameter_types.iter().all(|ty| ty == "I")
+            {
                 found.push(signature);
             }
         }
@@ -262,8 +263,7 @@ pub fn execute_static_integer_method(
     let supported: Vec<_> = matching_arity
         .into_iter()
         .filter(|(_, signature)| {
-            signature.return_type == "I"
-                && signature.parameter_types.iter().all(|ty| ty == "I")
+            signature.return_type == "I" && signature.parameter_types.iter().all(|ty| ty == "I")
         })
         .collect();
     if supported.is_empty() {
@@ -990,8 +990,8 @@ mod tests {
             outs: 0,
             insns: vec![0x0013, 42, 0x000f],
         }]);
-        let dex = DexFile::parse(&bytes, &crate::dex::DexLimits::default())
-            .expect("parse synthetic DEX");
+        let dex =
+            DexFile::parse(&bytes, &crate::dex::DexLimits::default()).expect("parse synthetic DEX");
 
         let methods =
             list_static_integer_methods(&dex, Some(TEST_CLASS)).expect("list supported signatures");
@@ -1011,8 +1011,8 @@ mod tests {
             outs: 0,
             insns: vec![0x0090, 0x0201, 0x000f],
         }]);
-        let dex = DexFile::parse(&bytes, &crate::dex::DexLimits::default())
-            .expect("parse synthetic DEX");
+        let dex =
+            DexFile::parse(&bytes, &crate::dex::DexLimits::default()).expect("parse synthetic DEX");
 
         assert!(matches!(
             execute_static_integer_method(&dex, TEST_CLASS, "sum", &[42]),
@@ -1035,8 +1035,8 @@ mod tests {
             outs: 0,
             insns: vec![0x0013, 42, 0x000f],
         }]);
-        let dex = DexFile::parse(&bytes, &crate::dex::DexLimits::default())
-            .expect("parse synthetic DEX");
+        let dex =
+            DexFile::parse(&bytes, &crate::dex::DexLimits::default()).expect("parse synthetic DEX");
         assert!(matches!(
             execute_static_integer_method(&dex, TEST_CLASS, "missing", &[]),
             Err(MethodExecutionError::MethodNotFound { .. })
