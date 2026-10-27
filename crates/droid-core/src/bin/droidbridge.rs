@@ -561,12 +561,7 @@ mod tests {
     #[test]
     fn parses_probe_methods_command_with_optional_class_filter() {
         assert_eq!(
-            parse_command(args(&[
-                "probe-methods",
-                "app.apk",
-                "classes.dex",
-                "LTest;"
-            ])),
+            parse_command(args(&["probe-methods", "app.apk", "classes.dex", "LTest;"])),
             Ok(CliCommand::ProbeMethods {
                 apk: PathBuf::from("app.apk"),
                 dex_entry: "classes.dex".to_owned(),
