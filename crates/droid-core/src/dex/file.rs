@@ -128,7 +128,7 @@ pub struct CodeItem {
 }
 
 /// A method resolved to readable names.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MethodSignature {
     pub class_descriptor: String,
     pub name: String,
