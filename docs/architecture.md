@@ -73,10 +73,11 @@ The preflight prevents an accidental manifest/request package mismatch and stops
 
 ## Command-line entry point
 
-The `droidbridge` binary exposes three paths into the shared core:
+The `droidbridge` binary exposes four paths into the shared core:
 
 - `inspect <apk-path>` runs the bounded APK inspector and prints manifest, DEX, and native-library summaries without executing the APK.
 - `status` probes the existing Waydroid installation/session and prints known adapter capabilities.
+- `engine-demo` runs a synthetic integer method in the project-owned `IntegerDexEngine` without Waydroid, demonstrating the internal engine independently of an Android installation.
 - `launch <apk-path> <package-name> [profile-id]` uses `launch_verified_apk`, so inspection and exact manifest-package matching happen before the Waydroid adapter is allowed to install or launch. It polls for the app process and exits after observing it or reporting failure.
 
 This CLI is an operational entry point, not an Android emulator. Waydroid must already be installed, initialized, and running. The optional profile id currently passes through `LaunchRequest` as metadata; the CLI does not yet load the profile registry or alter Android-visible device identity. A successful Waydroid command and an observed process are useful smoke-test signals, but do not prove app compatibility, correct rendering, input integration, or lifecycle behavior. Those still require a live test with a harmless APK.
@@ -124,7 +125,7 @@ The balanced preset should prefer on-demand runtime startup, avoid duplicate ser
 
 1. Portable config and profile validation, profile registry (done).
 2. DEX parsing and APK archive inspection with binary manifest parsing (done, unexecuted).
-3. DEX instruction decoding and a minimal interpreter.
+3. DEX instruction decoding and a minimal interpreter (initial bounded integer-only interpreter implemented; full app execution remains future work).
 4. Runtime adapter interface and backend capability report (contract plus initial Waydroid CLI adapter implemented; not live-validated).
 5. Verify an APK and pass launch requests through a ready runtime backend (preflight implemented; live APK execution not yet verified).
 6. Validate graphics acceleration, input, lifecycle and app isolation.
