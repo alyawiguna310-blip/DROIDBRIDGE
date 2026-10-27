@@ -8,20 +8,29 @@ DROIDBRIDGE is planned as a shared core with host-specific integrations:
 - LINDROID: Linux frontend and host integration.
 - Shared Rust core: portable settings, profile schema, package metadata, and runtime-backend contracts.
 
+## Platform rollout order
+
+DROIDBRIDGE is being developed **Linux-first** because the current developer workflow and optional Waydroid adapter are Linux-based. The rollout order is:
+
+1. Harden the shared DEX parser and bounded engine on Linux: correct instruction decoding, preserve resource limits, add regression tests, and use real-APK probes to find concrete compatibility gaps.
+2. Validate engine changes with Linux CI and, where available, harmless real APKs. Optimize measured hot paths only after correctness tests are in place; do not treat a higher probe count as proof that an APK runs correctly.
+3. Validate the Linux runtime adapter separately against a live, initialized Waydroid environment. Engine execution and an external Android runtime are separate paths and should not be conflated.
+4. Keep portable core APIs independent of Linux process launchers and host UI. After the Linux interfaces and tests stabilize, add Windows-target build checks and implement a Windows-specific runtime adapter/front end. Waydroid commands are not a Windows backend.
+
 ## Non-goals for the first milestones
 
-The scaffold does not emulate a CPU, implement ART, render Android graphics, provide Android system services, or install Google Play. A project-owned bounded interpreter now executes a small integer-only DEX subset supplied as a parsed code item, but no complete APK or Android application can run through that engine yet.
+The project does not yet implement ART, general object semantics, Android system services, graphics, or full application lifecycle behavior. The bounded DEX engine currently supports only a small scalar instruction subset and constrained static calls; it cannot run a complete APK or Android application end to end.
 
 ## Layers
 
 1. **Host frontend** — native windows, settings, input, accessibility, and host integration.
 2. **DroidCore** — portable configuration, profile schema, runtime-backend contracts, and app metadata models.
-3. **APK inspector** — safe ZIP/APK inspection, manifest parsing, ABI and SDK detection.
-4. **Project-owned execution engine** — the first internal DEX integer interpreter, operating on an already-parsed code item with strict instruction and step limits. It is not ART and cannot load a whole APK.
+3. **APK inspector** — bounded ZIP/APK inspection, manifest parsing, ABI and SDK detection.
+4. **Project-owned execution engine** — a bounded scalar DEX interpreter with constrained static calls across loaded DEX files. It is not ART and cannot load a whole APK.
 5. **External runtime adapter** — a defined core contract plus an optional Linux Waydroid CLI adapter for probing, installing/launching, polling, and stopping apps. Live Waydroid integration has not yet been validated.
-6. **Android application environment** — ART-equivalent class loading, framework APIs, system services, graphics and app lifecycle are still missing.
-6. **Native-code compatibility** — execute compatible host-native libraries directly where possible; use ARM translation only when necessary and supported.
-7. **Google services** — optional, legally provisioned integration evaluated separately for each runtime.
+6. **Android application environment** — ART-equivalent class loading, general framework APIs, system services, graphics, and app lifecycle remain missing.
+7. **Native-code compatibility** — execute compatible host-native libraries directly where possible; use ARM translation only when necessary and supported.
+8. **Google services** — optional, legally provisioned integration evaluated separately for each runtime.
 
 ## Core crate modules
 
@@ -32,7 +41,7 @@ The scaffold does not emulate a CPU, implement ART, render Android graphics, pro
 - `registry` — `ProfileRegistry`: in-memory store of validated profiles keyed by id, with an explicit active-profile selection.
 - `errors` — typed errors so callers match on variants instead of parsing strings.
 - `runtime` — adapter interfaces, capability declarations, validated launch requests, typed errors, and app-session lifecycle contracts.
-- `runtime::engine` — the project-owned `IntegerDexEngine`: bounded execution for a small integer-only DEX subset, with branch-boundary validation, register checks, typed errors, and an instruction-step limit. It works on parsed code items and is not a whole-APK runtime.
+- `runtime::engine` — the project-owned `IntegerDexEngine`: bounded DEX interpretation for scalar `int`, `boolean`, `byte`, `short`, and `char` values, with branch-boundary validation, register/code-size checks, literal arithmetic, unary operations, and static-call resolution across a validated APK DEX set. Values are carried in 32-bit registers and normalized at method boundaries. Nested calls share an instruction budget and have a depth limit; this is not a whole-APK runtime.
 - `runtime::waydroid::WaydroidBackend` — an optional Linux adapter around the documented external Waydroid CLI; it has mocked-command tests but has not been tested against a live Waydroid installation.
 - `launcher` — verified launch preflight: inspect the APK, match the manifest package, require backend readiness and explicitly supported install/launch capabilities, then invoke the adapter.
 - `dex` — bounds-checked DEX parser (header, id tables, class data, code items); execution is a separate layer.
@@ -74,26 +83,27 @@ The preflight prevents an accidental manifest/request package mismatch and stops
 
 ## Command-line entry point
 
-The `droidbridge` binary exposes four paths into the shared core:
+The `droidbridge` binary exposes these paths into the shared core:
 
 - `inspect <apk-path>` runs the bounded APK inspector and prints manifest, DEX, and native-library summaries without executing the APK.
 - `status` probes the existing Waydroid installation/session and prints known adapter capabilities.
 - `engine-demo` runs a synthetic integer method in the project-owned `IntegerDexEngine` without Waydroid, demonstrating the internal engine independently of an Android installation.
 - `methods` lists static `int(int, ...)` candidates from one DEX entry.
-- `run-method` resolves and executes a selected static integer method from the DEX tables and class data. Unsupported instructions or signatures fail explicitly.
+- `probe-methods` tries at most 20 candidates with zero-valued integer-like arguments and reports methods that execute or are refused. This is a coverage probe, not a correctness test: many methods require meaningful nonzero inputs.
+- `run-method` resolves and executes a selected static scalar method (`int`, `boolean`, `byte`, `short`, or `char`) from DEX tables and class data. Unsupported instructions or signatures fail explicitly.
 - `launch <apk-path> <package-name> [profile-id]` uses `launch_verified_apk`, so inspection and exact manifest-package matching happen before the Waydroid adapter is allowed to install or launch. It polls for the app process and exits after observing it or reporting failure.
 
 This CLI is an operational entry point, not an Android emulator. Waydroid must already be installed, initialized, and running. The optional profile id currently passes through `LaunchRequest` as metadata; the CLI does not yet load the profile registry or alter Android-visible device identity. A successful Waydroid command and an observed process are useful smoke-test signals, but do not prove app compatibility, correct rendering, input integration, or lifecycle behavior. Those still require a live test with a harmless APK.
 
 ## Project-owned DEX integer engine
 
-`runtime::engine::IntegerDexEngine` is the first internal execution component, written in this repository and separate from the Waydroid adapter. It can run an already parsed `dex::CodeItem` or resolve a static integer method (`int(int, ...)`) from a parsed `DexFile`. The resolver walks class definitions and class data, resolves the signature and code offset, then passes the method's real code units to the interpreter. The caller supplies 32-bit integer parameters, which are placed in the final input registers. Execution occurs in a bounded register frame and returns a 32-bit integer plus the instruction-step count.
+`runtime::engine::IntegerDexEngine` is the first internal execution component, written in this repository and separate from the Waydroid adapter. It can run an already parsed `dex::CodeItem` or resolve a static scalar method from a parsed `DexFile`. The resolver walks class definitions and class data, resolves the signature and code offset, then passes the method's real code units to the interpreter. Scalar `int`, `boolean`, `byte`, `short`, and `char` inputs/returns are represented in 32-bit registers and normalized according to their declared DEX type at method boundaries. Execution occurs in a bounded register frame and reports the instruction-step count.
 
-The CLI exposes `methods <apk> <dex-entry> [class-descriptor]` to list static integer method signature candidates and `run-method <apk> <dex-entry> <class-descriptor> <method-name> [integer-argument ...]` to attempt execution. The APK DEX reader uses the project's bounded archive validator, and the selected DEX is parsed with the normal bounds-checked parser before method lookup. Listing checks method metadata only; actual instruction support is established only when the interpreter decodes and executes the method. This still does not load a whole application.
+The CLI exposes `methods <apk> <dex-entry> [class-descriptor]` to list static scalar method candidates, `probe-methods` to attempt a bounded sample of candidates with zero-valued arguments, and `run-method <apk> <dex-entry> <class-descriptor> <method-name> [scalar-integer-argument ...]` to execute a selected method. The APK DEX reader uses the project's bounded archive validator, and the selected entry plus all other DEX entries that pass inspection are parsed with the normal bounds-checked parser before method lookup. Method IDs are decoded in the caller's DEX and then matched by full signature against definitions in the loaded set. Listing checks method metadata only; actual instruction support is established only when the interpreter decodes and executes the method. The probe is a coverage tool, not a correctness test, and does not load a whole application.
 
-The supported subset includes no-op and move instructions; integer constants; return instructions; goto branches; integer comparison branches; integer arithmetic and bitwise operations, including two-address forms. The engine rejects unknown opcodes and methods with try/catch tables. It pre-decodes instruction widths, validates branch destinations against instruction boundaries, bounds code units and instruction steps, checks register accesses, and handles integer division edge cases without panicking.
+The supported subset includes no-op/move instructions; integer constants; returns; goto and integer-comparison branches; 32-bit integer arithmetic/bitwise instructions including two-address and literal forms; integer negation and bitwise not; byte/char/short narrowing; and `invoke-static`, `invoke-static/range`, and `move-result` for static calls whose definitions appear in any loaded APK DEX file. Static callees may use only scalar `int`, `boolean`, `byte`, `short`, and `char` parameters and scalar or `void` return types. Values are normalized to the declared scalar width at method boundaries. The interpreter rejects unknown opcodes, methods with try/catch tables, reference/wide argument types, external/native/abstract callees and incompatible return values. It pre-decodes instruction widths, validates branch destinations against instruction boundaries, checks register and outgoing-argument slots, bounds code units, shares a total instruction budget across caller and callee, and caps nested calls at 32 levels.
 
-This implementation is deliberately narrow. It has no class loader, method dispatch, objects, fields, arrays, monitors, exceptions, native method calls, Android framework APIs, lifecycle, or graphics. It is not ART and cannot run APKPure or an ordinary Android app yet. The immediate objective is to grow it through small instruction and runtime tests before integrating more DEX metadata.
+This implementation is deliberately narrow. It has no general class loader or virtual/dynamic dispatch, objects, fields, arrays, monitors, exception handling, native method calls, general Android framework APIs, lifecycle, or graphics. A small explicit intrinsic table models the eight stable API 30+ `WindowInsets.Type` bit-mask methods exercised by the current APK probe; environment-dependent methods such as `SdkExtensions.getExtensionVersion` remain unsupported. Cross-DEX static resolution and these narrow intrinsics do not make the engine ART, and it cannot run APKPure or an ordinary Android app as a whole. Continue expanding it through opcode and real-APK coverage probes before tackling a general object/value model and Android runtime services.
 
 ## DEX parsing
 
@@ -130,7 +140,7 @@ The balanced preset should prefer on-demand runtime startup, avoid duplicate ser
 
 1. Portable config and profile validation, profile registry (done).
 2. DEX parsing and APK archive inspection with binary manifest parsing (done, unexecuted).
-3. DEX instruction decoding and a minimal interpreter (bounded integer-only interpreter plus actual DEX method resolution/execution implemented; full app execution remains future work).
+3. DEX instruction decoding and a minimal interpreter (bounded integer/scalar interpreter, real DEX method resolution, cross-DEX static calls, and a method-coverage probe implemented; full app execution remains future work).
 4. Runtime adapter interface and backend capability report (contract plus initial Waydroid CLI adapter implemented; not live-validated).
 5. Verify an APK and pass launch requests through a ready runtime backend (preflight implemented; live APK execution not yet verified).
 6. Validate graphics acceleration, input, lifecycle and app isolation.

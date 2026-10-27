@@ -7,7 +7,7 @@
 
 The shared core is intended to manage APK metadata, portable device profiles, runtime backends, and performance settings. The long-term goal is to run Android apps and games in host-integrated windows while using the host machine's actual CPU and GPU.
 
-> **Status: early scaffold.** This repository still has not demonstrated launching a real Android APK. It can inspect APKs, and its project-owned `runtime::engine::IntegerDexEngine` executes a small bounded subset of integer-only DEX methods supplied as parsed code items. A separate Linux Waydroid adapter and verified-launch preflight are also present, but live Waydroid installation, app compatibility, graphics, and full Android framework/ART behavior have not been validated.
+> **Status: Linux-first engine work in progress.** The repository can inspect APKs and execute a bounded subset of scalar DEX methods, including constrained static calls across an APK's DEX files. Recent Linux CI tests pass, but a complete Android APK still does not run end to end, and the latest corrected invocation decoder needs another real-APK probe. The optional Linux Waydroid adapter has not yet been validated against a live installation. Windows support remains a later phase; the shared Rust core is being kept host-agnostic so it can be reused.
 
 ## Initial configuration
 
@@ -93,9 +93,9 @@ This contract is not an emulator. The initial `WaydroidBackend` calls the docume
 
 ## Project-owned DEX execution engine
 
-The `runtime::engine::IntegerDexEngine` module is our own initial execution component. It does not call Waydroid or another Android runtime. It can now resolve a static integer method from actual parsed DEX metadata and execute that method's `CodeItem`, in addition to accepting synthetic code items for tests.
+The `runtime::engine::IntegerDexEngine` module is our own initial execution component. It does not call Waydroid or another Android runtime. It can now resolve static scalar methods from actual parsed DEX metadata and execute their `CodeItem`, in addition to accepting synthetic code items for tests.
 
-Supported instruction families include moves, integer constants, returns, goto branches, integer comparisons, and integer arithmetic/bitwise operations. It rejects unsupported opcodes and methods with exception-handler tables. It checks branch targets are instruction boundaries and imposes configurable code-size and instruction-step limits.
+Supported instruction families include moves; integer constants; returns; goto and integer-comparison branches; 32-bit arithmetic/bitwise operations, including two-address and literal forms; integer negation and bitwise not; byte/char/short narrowing; and `invoke-static`, `invoke-static/range`, and `move-result` for scalar methods defined in any validated DEX file loaded from the APK bundle. Scalar `int`, `boolean`, `byte`, `short`, and `char` values are represented in 32-bit registers and normalized to their declared width at method boundaries. Nested calls share one instruction budget and are limited to 32 call levels. The interpreter also has an explicit API 30+ intrinsic table for the eight stable `WindowInsets.Type` bit-mask methods used by the current probe; this is not a general Android framework emulator. Environment-dependent framework methods such as `SdkExtensions.getExtensionVersion`, unknown framework calls, native/abstract callees, reference/wide types, and methods with exception-handler tables are still rejected. Branch targets must be instruction boundaries, and register/code-size/argument bounds are checked.
 
 Example: execute a small synthetic method that computes 7 + 35 and returns 42.
 
@@ -116,17 +116,18 @@ assert_eq!(result.return_value, EngineReturn::Int(42));
 # Ok::<(), droid_core::runtime::engine::EngineError>(())
 ```
 
-You can inspect method candidates and execute a supported static integer method directly from an APK:
+You can inspect method candidates, probe a bounded sample, and execute a supported static scalar method directly from an APK:
 
 ```sh
 cargo run -p droid-core --bin droidbridge -- methods "/path/to/app.apk" classes.dex
+cargo run -p droid-core --bin droidbridge -- probe-methods "/path/to/app.apk" classes.dex
 cargo run -p droid-core --bin droidbridge -- methods "/path/to/app.apk" classes.dex 'Lexample/Calculator;'
 cargo run -p droid-core --bin droidbridge -- run-method "/path/to/app.apk" classes.dex 'Lexample/Calculator;' sum 19 23
 ```
 
 The method-listing command reports metadata-compatible candidates (static methods returning `int` with only `int` parameters); it does not promise every body uses supported instructions. The execution command reads the selected DEX entry through the bounded APK archive reader, parses it, resolves the class and method from DEX tables/class data, and executes the decoded code item. It accepts static `int(int, ...)` methods only. It rejects absent methods, wrong argument counts, unsupported signatures/opcodes, and methods containing exception-handler tables. A class descriptor contains semicolons, so quote it in shells such as Bash.
 
-This is a genuine first step toward an internal runtime, not a complete JVM/ART implementation. It does not yet perform class loading, method invocation, object allocation, field access, arrays, Android framework calls, native execution, app lifecycle, or graphics. It cannot run APKPure or ordinary APKs end to end. Waydroid remains a separate optional adapter for live Android app execution while the internal engine grows.
+This is a genuine first step toward an internal runtime, not a complete JVM/ART implementation. It does not yet perform general class loading or dispatch, object allocation, field access, arrays, arbitrary Android framework calls, native execution, app lifecycle, or graphics. A few documented, deterministic framework constants are modeled explicitly; that does not establish Android API compatibility. It cannot run APKPure or ordinary APKs end to end. Waydroid remains a separate optional adapter for live Android app execution while the internal engine grows.
 
 ## Verified APK launch preflight
 
@@ -151,8 +152,9 @@ cargo run -p droid-core --bin droidbridge -- launch "/path/to/app.apk" com.examp
 - `inspect` prints the parsed manifest metadata, permissions, DEX parse results, native-library names, and warnings. It does not install or execute the APK.
 - `status` probes the existing Waydroid environment and prints the adapter's declared capabilities.
 - `engine-demo` executes a synthetic integer DEX method entirely in DROIDBRIDGE's own engine and should print `return: 42`; it does not need Waydroid.
-- `methods` lists static integer-returning method candidates from one DEX entry; an optional class descriptor narrows output.
-- `run-method` resolves a static `int(int, ...)` method from DEX metadata and executes it in the internal engine, without Waydroid. Only the current instruction subset is supported.
+- `methods` lists static scalar method candidates (`int`, `boolean`, `byte`, `short`, or `char`) from one DEX entry; an optional class descriptor narrows output.
+- `probe-methods` tries at most 20 candidates from the selected DEX with zero-valued scalar arguments. It loads all APK DEX entries that pass validation so static calls can resolve methods defined in `classes2.dex` and later files. This is a coverage probe, not a semantic correctness test; some methods require nonzero inputs.
+- `run-method` resolves the selected entry's root method and executes it with definitions resolved across the validated APK DEX set, without Waydroid. It takes signed 32-bit command-line values, normalizes them to declared scalar parameter types, and normalizes scalar returns.
 - `launch` runs the verified preflight before delegating to Waydroid, then waits for the target process to be observed. The package name must exactly match the APK manifest. If omitted, the profile id defaults to `POCO_F6`.
 
 The CLI does not install or initialize Waydroid, start its session, apply device-identity spoofing, or prove general app compatibility. The profile id is currently carried as launch-request metadata only. A real launch has not yet been verified on a live Waydroid installation.
@@ -173,14 +175,15 @@ The first build downloads the `zip` crate, which updates `Cargo.lock`.
 ## Roadmap
 
 1. Validate portable configuration and host/device profile separation. (done)
-2. Implement APK archive inspection and manifest metadata extraction. (done, no execution)
-3. DEX instruction decoding and a minimal interpreter.
-4. Define a replaceable runtime backend interface and backend capability report. (contract plus initial Waydroid CLI adapter implemented; live runtime not yet validated)
-5. Evaluate and integrate existing Android runtimes separately for Windows and Linux. (Waydroid CLI path implemented for Linux; real APK launch not yet validated)
-6. Validate execution of a real APK, graphics, input, and lifecycle.
-7. Investigate ARM64 native-library translation where required.
-8. Evaluate legitimate Google Play support and its certification constraints.
-9. Benchmark RAM, CPU, GPU, startup time, and portability across machines.
+2. Implement bounded APK inspection and manifest metadata extraction. (done; inspection is not execution)
+3. **Linux-first engine hardening:** DEX invocation decoding, cross-DEX method resolution, bounded scalar execution, regression coverage, and real-APK probes. (in progress; not a complete Android runtime)
+4. Optimize measured hot paths in the shared Rust core while preserving resource limits and explicit unsupported-feature errors. (signature index added; performance still needs benchmarking)
+5. Validate a supported Linux runtime backend with a harmless APK, including installation, launch, input, graphics, and lifecycle. (Waydroid adapter exists; live validation remains)
+6. Stabilize platform-neutral core APIs and add Windows-target CI/build checks.
+7. Implement a Windows host frontend and a Windows-appropriate Android runtime adapter; do not reuse the Linux Waydroid adapter as if it were cross-platform.
+8. Investigate ARM64 native-library translation where required.
+9. Evaluate legitimate Google Play support and its certification constraints.
+10. Benchmark RAM, CPU, GPU, startup time, and portability across machines.
 
 ## Licensing
 

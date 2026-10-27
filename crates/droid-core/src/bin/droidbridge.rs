@@ -9,7 +9,7 @@ use droid_core::apk::{ApkLimits, ApkReport, inspect_file, read_dex_entry};
 use droid_core::dex::{CodeItem, DexFile, DexLimits};
 use droid_core::launcher::launch_verified_apk;
 use droid_core::runtime::engine::{
-    EngineReturn, IntegerDexEngine, execute_static_integer_method, list_static_integer_methods,
+    DexSetExecutor, EngineReturn, IntegerDexEngine, list_static_scalar_methods,
 };
 use droid_core::runtime::{
     LaunchRequest, RuntimeBackend, RuntimeSession, RuntimeSessionState, waydroid::WaydroidBackend,
@@ -44,6 +44,11 @@ fn run() -> Result<(), Box<dyn Error>> {
             dex_entry,
             class_descriptor,
         } => list_methods(&apk, &dex_entry, class_descriptor.as_deref())?,
+        CliCommand::ProbeMethods {
+            apk,
+            dex_entry,
+            class_descriptor,
+        } => probe_methods(&apk, &dex_entry, class_descriptor.as_deref())?,
         CliCommand::RunMethod {
             apk,
             dex_entry,
@@ -75,6 +80,11 @@ enum CliCommand {
     Status,
     EngineDemo,
     Methods {
+        apk: PathBuf,
+        dex_entry: String,
+        class_descriptor: Option<String>,
+    },
+    ProbeMethods {
         apk: PathBuf,
         dex_entry: String,
         class_descriptor: Option<String>,
@@ -113,6 +123,14 @@ where
         }),
         "status" if arguments.len() == 1 => Ok(CliCommand::Status),
         "engine-demo" if arguments.len() == 1 => Ok(CliCommand::EngineDemo),
+        "probe-methods" if (3..=4).contains(&arguments.len()) => Ok(CliCommand::ProbeMethods {
+            apk: PathBuf::from(&arguments[1]),
+            dex_entry: utf8_arg(&arguments, 2, "DEX entry")?,
+            class_descriptor: arguments
+                .get(3)
+                .map(|_| utf8_arg(&arguments, 3, "class descriptor"))
+                .transpose()?,
+        }),
         "methods" if (3..=4).contains(&arguments.len()) => Ok(CliCommand::Methods {
             apk: PathBuf::from(&arguments[1]),
             dex_entry: utf8_arg(&arguments, 2, "DEX entry")?,
@@ -166,11 +184,14 @@ where
         "inspect" => Err("usage: droidbridge inspect <apk-path>".to_owned()),
         "status" => Err("usage: droidbridge status".to_owned()),
         "engine-demo" => Err("usage: droidbridge engine-demo".to_owned()),
+        "probe-methods" => Err(
+            "usage: droidbridge probe-methods <apk-path> <dex-entry> [class-descriptor]".to_owned()
+        ),
         "methods" => Err(
             "usage: droidbridge methods <apk-path> <dex-entry> [class-descriptor]".to_owned()
         ),
         "run-method" => Err(
-            "usage: droidbridge run-method <apk-path> <dex-entry> <class-descriptor> <method-name> [integer-argument ...]".to_owned()
+            "usage: droidbridge run-method <apk-path> <dex-entry> <class-descriptor> <method-name> [scalar-integer-argument ...]".to_owned()
         ),
         "launch" => {
             Err("usage: droidbridge launch <apk-path> <package-name> [profile-id]".to_owned())
@@ -189,6 +210,7 @@ fn print_usage() {
            droidbridge status\n\
            droidbridge engine-demo\n\
            droidbridge methods <apk-path> <dex-entry> [class-descriptor]\n\
+           droidbridge probe-methods <apk-path> <dex-entry> [class-descriptor]\n\
            droidbridge run-method <apk-path> <dex-entry> <class-descriptor> <method-name> [integer-argument ...]\n\
            droidbridge launch <apk-path> <package-name> [profile-id]\n\
            droidbridge help\n\n\
@@ -196,8 +218,9 @@ fn print_usage() {
            inspect      Parse APK metadata without installing or executing it.\n\
            status       Probe the existing Waydroid installation/session.\n\
            engine-demo  Run a synthetic integer method in our own DEX engine.\n\
-           methods      List static int(int, ...) method signature candidates.\n\
-           run-method   Execute a supported static integer method from actual DEX metadata.\n\
+           methods      List static scalar method candidates (int/boolean/byte/short/char).\n\
+           probe-methods Execute up to 20 candidates with zero-valued scalar arguments to measure current engine coverage.\n\
+           run-method   Execute a supported static scalar method from actual DEX metadata.\n\
            launch       Verify the APK package and backend before delegating launch.\n\n\
          Method execution supports only a small DEX instruction subset; it does not run a whole APK."
     );
@@ -234,6 +257,56 @@ fn load_dex_from_apk<'a>(
     Ok(DexFile::parse(bytes.as_slice(), &dex_limits)?)
 }
 
+/// Load every DEX entry that passed APK inspection so method-call resolution can
+/// look up definitions declared outside the selected entry. The byte buffers
+/// are owned by the caller and outlive the parsed DexFile views.
+fn load_dex_bundle_from_apk<'a>(
+    apk: &std::path::Path,
+    requested_entry: &str,
+    limits: &ApkLimits,
+    buffers: &'a mut Vec<Vec<u8>>,
+    entry_names: &mut Vec<String>,
+) -> Result<Vec<DexFile<'a>>, Box<dyn Error>> {
+    let report = inspect_file(apk, limits)?;
+    if !report
+        .dex_files
+        .iter()
+        .any(|entry| entry.entry_name == requested_entry)
+    {
+        return Err(io::Error::other(format!(
+            "DEX entry {requested_entry:?} was not found in the APK"
+        ))
+        .into());
+    }
+
+    buffers.clear();
+    entry_names.clear();
+    for entry in report
+        .dex_files
+        .iter()
+        .filter(|entry| entry.outcome.is_ok())
+    {
+        buffers.push(read_dex_entry(apk, &entry.entry_name, limits)?);
+        entry_names.push(entry.entry_name.clone());
+    }
+
+    if !entry_names.iter().any(|name| name == requested_entry) {
+        return Err(io::Error::other(format!(
+            "requested DEX entry {requested_entry:?} did not pass DEX validation"
+        ))
+        .into());
+    }
+
+    let dex_limits = DexLimits {
+        max_file_size: usize::try_from(limits.max_dex_size).unwrap_or(usize::MAX),
+    };
+    let mut dexes = Vec::with_capacity(buffers.len());
+    for bytes in buffers.iter() {
+        dexes.push(DexFile::parse(bytes.as_slice(), &dex_limits)?);
+    }
+    Ok(dexes)
+}
+
 fn list_methods(
     apk: &std::path::Path,
     dex_entry: &str,
@@ -243,22 +316,94 @@ fn list_methods(
     let limits = ApkLimits::default();
     let mut bytes = Vec::new();
     let dex = load_dex_from_apk(apk, dex_entry, &limits, &mut bytes)?;
-    let methods = list_static_integer_methods(&dex, class_filter)?;
+    let methods = list_static_scalar_methods(&dex, class_filter)?;
     println!(
-        "static integer method candidates: {} (metadata signature only; instruction support is checked during execution)",
+        "static scalar method candidates: {} (metadata signature only; instruction support is checked during execution)",
         methods.len()
     );
     for signature in methods.iter().take(MAX_METHODS_TO_PRINT) {
         println!(
-            "{}->{}({})I",
+            "{}->{}({}){}",
             signature.class_descriptor,
             signature.name,
-            signature.parameter_types.join(",")
+            signature.parameter_types.join(","),
+            signature.return_type
         );
     }
     if methods.len() > MAX_METHODS_TO_PRINT {
         println!(
             "output truncated to the first {MAX_METHODS_TO_PRINT} candidates; provide a class descriptor to narrow the list"
+        );
+    }
+    Ok(())
+}
+
+fn probe_methods(
+    apk: &std::path::Path,
+    dex_entry: &str,
+    class_filter: Option<&str>,
+) -> Result<(), Box<dyn Error>> {
+    const MAX_PROBE_METHODS: usize = 20;
+    let limits = ApkLimits::default();
+    let mut buffers = Vec::new();
+    let mut entry_names = Vec::new();
+    let dexes = load_dex_bundle_from_apk(apk, dex_entry, &limits, &mut buffers, &mut entry_names)?;
+    let root_dex_index = entry_names
+        .iter()
+        .position(|name| name == dex_entry)
+        .expect("requested DEX was validated and loaded");
+    println!("loaded DEX bundle: {}", entry_names.join(", "));
+    let executor = DexSetExecutor::new(&dexes)?;
+    let candidates = list_static_scalar_methods(&dexes[root_dex_index], class_filter)?;
+    let attempts = candidates.len().min(MAX_PROBE_METHODS);
+
+    println!(
+        "probing {attempts} of {} static scalar method candidates with zero-valued arguments",
+        candidates.len()
+    );
+    println!(
+        "This is a coverage probe, not a correctness test; methods may require nonzero inputs."
+    );
+
+    let mut executed = 0usize;
+    let mut refused = 0usize;
+    for signature in candidates.iter().take(attempts) {
+        let parameters = vec![0; signature.parameter_types.len()];
+        match executor.execute_static_scalar_method_at(
+            root_dex_index,
+            &signature.class_descriptor,
+            &signature.name,
+            &parameters,
+        ) {
+            Ok(report) => {
+                executed += 1;
+                println!(
+                    "  EXECUTED {}->{}({}){} => {:?} ({} total steps including callees)",
+                    signature.class_descriptor,
+                    signature.name,
+                    signature.parameter_types.join(","),
+                    signature.return_type,
+                    report.execution.return_value,
+                    report.execution.instruction_steps
+                );
+            }
+            Err(error) => {
+                refused += 1;
+                println!(
+                    "  REFUSED  {}->{}({}){}: {error}",
+                    signature.class_descriptor,
+                    signature.name,
+                    signature.parameter_types.join(","),
+                    signature.return_type
+                );
+            }
+        }
+    }
+    println!("probe summary: {executed} executed, {refused} refused");
+    if candidates.len() > attempts {
+        println!(
+            "remaining candidates not attempted: {}; use a class descriptor to narrow the probe",
+            candidates.len() - attempts
         );
     }
     Ok(())
@@ -272,14 +417,27 @@ fn run_method(
     parameters: &[i32],
 ) -> Result<(), Box<dyn Error>> {
     let limits = ApkLimits::default();
-    let mut bytes = Vec::new();
-    let dex = load_dex_from_apk(apk, dex_entry, &limits, &mut bytes)?;
-    let report = execute_static_integer_method(&dex, class_descriptor, method_name, parameters)?;
+    let mut buffers = Vec::new();
+    let mut entry_names = Vec::new();
+    let dexes = load_dex_bundle_from_apk(apk, dex_entry, &limits, &mut buffers, &mut entry_names)?;
+    let root_dex_index = entry_names
+        .iter()
+        .position(|name| name == dex_entry)
+        .expect("requested DEX was validated and loaded");
+    println!("loaded DEX bundle: {}", entry_names.join(", "));
+    let executor = DexSetExecutor::new(&dexes)?;
+    let report = executor.execute_static_scalar_method_at(
+        root_dex_index,
+        class_descriptor,
+        method_name,
+        parameters,
+    )?;
     println!(
-        "method: {}->{}({})I",
+        "method: {}->{}({}){}",
         report.signature.class_descriptor,
         report.signature.name,
-        report.signature.parameter_types.join(",")
+        report.signature.parameter_types.join(","),
+        report.signature.return_type
     );
     println!("engine: DROIDBRIDGE IntegerDexEngine");
     println!(
@@ -289,7 +447,13 @@ fn run_method(
     match report.execution.return_value {
         EngineReturn::Int(value) => println!("return: {value}"),
         EngineReturn::Void => {
-            return Err(io::Error::other("integer method unexpectedly returned void").into());
+            return Err(io::Error::other("scalar method unexpectedly returned void").into());
+        }
+        EngineReturn::NullReference | EngineReturn::ObjectReference { .. } => {
+            return Err(io::Error::other(
+                "scalar method unexpectedly returned an object reference",
+            )
+            .into());
         }
     }
     Ok(())
@@ -312,6 +476,11 @@ fn run_engine_demo() -> Result<(), Box<dyn Error>> {
         EngineReturn::Int(value) => println!("return: {value}"),
         EngineReturn::Void => {
             return Err(io::Error::other("integer engine demo returned void").into());
+        }
+        EngineReturn::NullReference | EngineReturn::ObjectReference { .. } => {
+            return Err(
+                io::Error::other("integer engine demo returned an object reference").into(),
+            );
         }
     }
     Ok(())
@@ -471,6 +640,27 @@ mod tests {
                 profile: "MY_DEVICE".to_owned(),
             })
         );
+    }
+
+    #[test]
+    fn parses_probe_methods_command_with_optional_class_filter() {
+        assert_eq!(
+            parse_command(args(&["probe-methods", "app.apk", "classes.dex", "LTest;"])),
+            Ok(CliCommand::ProbeMethods {
+                apk: PathBuf::from("app.apk"),
+                dex_entry: "classes.dex".to_owned(),
+                class_descriptor: Some("LTest;".to_owned()),
+            })
+        );
+        assert_eq!(
+            parse_command(args(&["probe-methods", "app.apk", "classes.dex"])),
+            Ok(CliCommand::ProbeMethods {
+                apk: PathBuf::from("app.apk"),
+                dex_entry: "classes.dex".to_owned(),
+                class_descriptor: None,
+            })
+        );
+        assert!(parse_command(args(&["probe-methods", "app.apk"])).is_err());
     }
 
     #[test]
