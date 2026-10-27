@@ -131,6 +131,52 @@ pub fn inspect_file(path: impl AsRef<Path>, limits: &ApkLimits) -> Result<ApkRep
     inspect_reader(BufReader::new(file), limits)
 }
 
+/// Read one top-level DEX entry from an APK without extracting it to disk.
+///
+/// The archive is opened through the same bounded, read-only archive validator
+/// used by APK inspection. The entry must be named `classes.dex`,
+/// `classes2.dex`, and so on. The caller should inspect the APK first and
+/// parse the returned bytes with `DexFile::parse` before using them.
+pub fn read_dex_entry(
+    path: impl AsRef<Path>,
+    entry_name: &str,
+    limits: &ApkLimits,
+) -> Result<Vec<u8>, ApkError> {
+    if dex_index(entry_name).is_none() {
+        return Err(ApkError::NotDexEntry {
+            name: entry_name.to_owned(),
+        });
+    }
+
+    let path = path.as_ref();
+    let io_err = |error: io::Error| ApkError::Io {
+        path: Some(path.to_path_buf()),
+        kind: error.kind(),
+    };
+    let file = File::open(path).map_err(io_err)?;
+    let size = file.metadata().map_err(io_err)?.len();
+    if size > limits.max_apk_size {
+        return Err(ApkError::FileTooLarge {
+            size,
+            max: limits.max_apk_size,
+        });
+    }
+
+    let mut archive = ApkArchive::open(BufReader::new(file), limits.max_entries)?;
+    if !archive
+        .entries()
+        .iter()
+        .any(|entry| entry.name == entry_name && !entry.is_dir)
+    {
+        return Err(ApkError::MissingDexEntry {
+            name: entry_name.to_owned(),
+        });
+    }
+
+    let mut budget = ReadBudget::new(limits.max_total_read);
+    archive.read_entry(entry_name, limits.max_dex_size, &mut budget)
+}
+
 /// Inspect an APK held in memory.
 pub fn inspect_bytes(bytes: &[u8], limits: &ApkLimits) -> Result<ApkReport, ApkError> {
     let size = bytes.len() as u64;
@@ -313,6 +359,27 @@ mod tests {
         let report = inspect(&bytes).expect("inspect");
         assert_eq!(report.manifest.package, "com.example.app");
         assert!(report.all_dex_valid());
+    }
+
+    #[test]
+    fn reads_only_named_top_level_dex_entries_with_limits() {
+        let apk = minimal_apk();
+        let path = temp_path("read-dex");
+        std::fs::write(&path, &apk).expect("write test apk");
+
+        let bytes = read_dex_entry(&path, "classes.dex", &ApkLimits::default())
+            .expect("read DEX entry");
+        assert_eq!(bytes, sample_dex());
+        assert!(matches!(
+            read_dex_entry(&path, "AndroidManifest.xml", &ApkLimits::default()),
+            Err(ApkError::NotDexEntry { .. })
+        ));
+        assert!(matches!(
+            read_dex_entry(&path, "classes2.dex", &ApkLimits::default()),
+            Err(ApkError::MissingDexEntry { .. })
+        ));
+
+        std::fs::remove_file(path).expect("remove test apk");
     }
 
     #[test]
