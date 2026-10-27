@@ -584,7 +584,8 @@ impl Error for EngineError {}
 /// - return-void, return;
 /// - goto, goto/16, goto/32;
 /// - if-eq, if-ne, if-lt, if-ge, if-gt, if-le and their *z forms;
-/// - 32-bit integer arithmetic/bitwise operations and their /2addr forms.
+/// - 32-bit integer arithmetic/bitwise operations, /2addr and literal forms;
+/// - integer negation, bitwise not, and byte/char/short narrowing.
 ///
 /// Method parameters must already be represented as 32-bit integers. They are
 /// copied into the final ins_size registers, as required for a DEX method
@@ -744,6 +745,39 @@ impl IntegerDexEngine {
                     let value = (u32::from(code.insns[pc + 1]) << 16) as i32;
                     write_register(&mut registers, dest, value, pc)?;
                 }
+                0x7b..=0x7c | 0x8d..=0x8f => {
+                    let dest = usize::from((word >> 8) & 0x0f);
+                    let src = usize::from(word >> 12);
+                    let source = read_register(&registers, src, pc)?;
+                    let value = match instruction.opcode {
+                        0x7b => source.wrapping_neg(),
+                        0x7c => !source,
+                        0x8d => i32::from(source as i8),
+                        0x8e => i32::from(source as u16),
+                        0x8f => i32::from(source as i16),
+                        _ => unreachable!("only implemented unary integer opcodes are dispatched"),
+                    };
+                    write_register(&mut registers, dest, value, pc)?;
+                }
+                0xd0..=0xd7 => {
+                    // 22s: vA/vB are four-bit registers, followed by a signed 16-bit literal.
+                    let dest = usize::from((word >> 8) & 0x0f);
+                    let src = usize::from(word >> 12);
+                    let left = read_register(&registers, src, pc)?;
+                    let literal = i32::from(code.insns[pc + 1] as i16);
+                    let value = arithmetic_literal(instruction.opcode, left, literal, pc)?;
+                    write_register(&mut registers, dest, value, pc)?;
+                }
+                0xd8..=0xe2 => {
+                    // 22b: vA in the first unit; vB and signed 8-bit literal in the second.
+                    let dest = usize::from(word >> 8);
+                    let operands = code.insns[pc + 1];
+                    let src = usize::from(operands & 0x00ff);
+                    let literal = i32::from((operands >> 8) as u8 as i8);
+                    let left = read_register(&registers, src, pc)?;
+                    let value = arithmetic_literal(instruction.opcode, left, literal, pc)?;
+                    write_register(&mut registers, dest, value, pc)?;
+                }
                 0x28..=0x2a => {
                     next_pc = instruction.branch_target.expect("goto target is decoded");
                 }
@@ -864,9 +898,10 @@ fn decode_program(
         let width = match opcode {
             0x00 if word == 0 => 1,
             0x00 => return Err(EngineError::UnsupportedOpcode { pc, opcode }),
-            0x01 | 0x0e | 0x0f | 0x12 | 0x28 | 0xb0..=0xba => 1,
+            0x01 | 0x0e | 0x0f | 0x12 | 0x28 | 0x7b..=0x7c | 0x8d..=0x8f
+            | 0xb0..=0xba => 1,
             0x0a if allow_static_calls => 1,
-            0x02 | 0x13 | 0x15 | 0x29 | 0x32..=0x3d | 0x90..=0x9a => 2,
+            0x02 | 0x13 | 0x15 | 0x29 | 0x32..=0x3d | 0x90..=0x9a | 0xd0..=0xe2 => 2,
             0x03 | 0x14 | 0x2a => 3,
             0x71 | 0x77 if allow_static_calls => 3,
             _ => return Err(EngineError::UnsupportedOpcode { pc, opcode }),
@@ -984,6 +1019,28 @@ fn compare_zero(opcode: u8, value: i32) -> bool {
     }
 }
 
+fn arithmetic_literal(
+    opcode: u8,
+    source: i32,
+    literal: i32,
+    pc: usize,
+) -> Result<i32, EngineError> {
+    match opcode {
+        0xd0 | 0xd8 => arithmetic(0x90, source, literal, pc),
+        0xd1 | 0xd9 => arithmetic(0x91, literal, source, pc),
+        0xd2 | 0xda => arithmetic(0x92, source, literal, pc),
+        0xd3 | 0xdb => arithmetic(0x93, source, literal, pc),
+        0xd4 | 0xdc => arithmetic(0x94, source, literal, pc),
+        0xd5 | 0xdd => arithmetic(0x95, source, literal, pc),
+        0xd6 | 0xde => arithmetic(0x96, source, literal, pc),
+        0xd7 | 0xdf => arithmetic(0x97, source, literal, pc),
+        0xe0 => arithmetic(0x98, source, literal, pc),
+        0xe1 => arithmetic(0x99, source, literal, pc),
+        0xe2 => arithmetic(0x9a, source, literal, pc),
+        _ => unreachable!("only supported literal arithmetic opcodes are dispatched"),
+    }
+}
+
 fn arithmetic(opcode: u8, left: i32, right: i32, pc: usize) -> Result<i32, EngineError> {
     Ok(match opcode {
         0x90 => left.wrapping_add(right),
@@ -1073,6 +1130,90 @@ mod tests {
             run(&method, &[]).unwrap().return_value,
             EngineReturn::Int(-1)
         );
+    }
+
+    #[test]
+    fn executes_all_integer_literal_arithmetic_opcodes() {
+        let cases: &[(u8, i32)] = &[
+            (0xd0, 15),
+            (0xd1, -5),
+            (0xd2, 50),
+            (0xd3, 2),
+            (0xd4, 0),
+            (0xd5, 0),
+            (0xd6, 15),
+            (0xd7, 15),
+            (0xd8, 15),
+            (0xd9, -5),
+            (0xda, 50),
+            (0xdb, 2),
+            (0xdc, 0),
+            (0xdd, 0),
+            (0xde, 15),
+            (0xdf, 15),
+            (0xe0, 320),
+            (0xe1, 0),
+            (0xe2, 0),
+        ];
+
+        for &(opcode, expected) in cases {
+            let method = if opcode <= 0xd7 {
+                // v0 = operation(v1, #5); return v0
+                code(2, 1, &[0x10d0 | u16::from(opcode - 0xd0), 5, 0x000f])
+            } else if opcode <= 0xdf {
+                // v0 = operation(v1, #5); return v0, with the lit8 in the high byte.
+                let literal_and_register = 0x0501;
+                code(
+                    2,
+                    1,
+                    &[
+                        (u16::from(opcode) & 0x00ff) | 0x0000,
+                        literal_and_register,
+                        0x000f,
+                    ],
+                )
+            } else {
+                let literal_and_register = 0x0501;
+                code(
+                    2,
+                    1,
+                    &[
+                        u16::from(opcode),
+                        literal_and_register,
+                        0x000f,
+                    ],
+                )
+            };
+            let result = run(&method, &[10]);
+            assert_eq!(
+                result.map(|report| report.return_value),
+                Ok(EngineReturn::Int(expected)),
+                "opcode 0x{opcode:02x}"
+            );
+        }
+    }
+
+    #[test]
+    fn executes_unary_integer_and_narrowing_opcodes() {
+        for (opcode, input, expected) in [
+            (0x7b, 12_i32, -12_i32),
+            (0x7c, 0_i32, -1_i32),
+            (0x8d, 255_i32, -1_i32),
+            (0x8e, -1_i32, 65_535_i32),
+            (0x8f, 65_535_i32, -1_i32),
+        ] {
+            // const/16 v1, literal; unary-op v0, v1; return v0.
+            let value = input as u16 as i16;
+            let mut units = vec![0x0113, value as u16];
+            units.push((0x1 << 8) | u16::from(opcode));
+            units.push(0x000f);
+            let method = code(2, 0, &units);
+            assert_eq!(
+                run(&method, &[]).map(|report| report.return_value),
+                Ok(EngineReturn::Int(expected)),
+                "opcode 0x{opcode:02x}"
+            );
+        }
     }
 
     #[test]
