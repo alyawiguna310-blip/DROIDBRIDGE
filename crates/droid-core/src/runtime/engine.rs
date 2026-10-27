@@ -2486,7 +2486,8 @@ mod tests {
         let report = execute_static_scalar_method(&dex, TEST_CLASS, "caller", &[])
             .expect("execute object-returning static call");
         assert_eq!(report.execution.return_value, EngineReturn::Int(42));
-        assert_eq!(report.execution.instruction_steps, 5);
+        // Caller (3 instructions) + factory (new-instance + return-object).
+        assert_eq!(report.execution.instruction_steps, 6);
     }
 
     #[test]
