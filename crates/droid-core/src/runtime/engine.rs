@@ -486,22 +486,22 @@ fn execute_dex_method_index(
         caller_dex_index,
         method_idx,
     ) {
-            Ok(resolved) => resolved,
-            Err(error) => {
-                // A small, explicit set of framework intrinsics can be modeled
-                // without pretending that the Android framework itself is loaded.
-                let caller_dex = context.dexes.get(caller_dex_index).ok_or_else(|| {
-                    static_call_failed(method_idx, "caller DEX index is outside the loaded DEX set")
-                })?;
-                let signature = caller_dex
-                    .method_signature(method_idx)
-                    .map_err(|metadata_error| static_call_failed(method_idx, metadata_error))?;
-                if let Some(value) = api30_window_insets_type_intrinsic(&signature, parameters) {
-                    return Ok(EngineReturn::Int(value));
-                }
-                return Err(error);
+        Ok(resolved) => resolved,
+        Err(error) => {
+            // A small, explicit set of framework intrinsics can be modeled
+            // without pretending that the Android framework itself is loaded.
+            let caller_dex = context.dexes.get(caller_dex_index).ok_or_else(|| {
+                static_call_failed(method_idx, "caller DEX index is outside the loaded DEX set")
+            })?;
+            let signature = caller_dex
+                .method_signature(method_idx)
+                .map_err(|metadata_error| static_call_failed(method_idx, metadata_error))?;
+            if let Some(value) = api30_window_insets_type_intrinsic(&signature, parameters) {
+                return Ok(EngineReturn::Int(value));
             }
-        };
+            return Err(error);
+        }
+    };
     if method.access_flags & 0x8 == 0 {
         return Err(static_call_failed(
             method_idx,
