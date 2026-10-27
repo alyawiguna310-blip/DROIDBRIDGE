@@ -675,7 +675,12 @@ fn execute_dex_method_index(
             method_idx,
             "method has scalar return type but executed return-void",
         )),
-        ("V", EngineReturn::Int(_) | EngineReturn::NullReference | EngineReturn::ObjectReference { .. }) => Err(static_call_failed(
+        (
+            "V",
+            EngineReturn::Int(_)
+            | EngineReturn::NullReference
+            | EngineReturn::ObjectReference { .. },
+        ) => Err(static_call_failed(
             method_idx,
             "method is declared void but executed a value return",
         )),
@@ -1171,10 +1176,7 @@ impl IntegerDexEngine {
                 }
                 0x07 | 0x08 | 0x09 => {
                     let (dest, src) = match instruction.opcode {
-                        0x07 => (
-                            usize::from((word >> 8) & 0x0f),
-                            usize::from(word >> 12),
-                        ),
+                        0x07 => (usize::from((word >> 8) & 0x0f), usize::from(word >> 12)),
                         0x08 => (usize::from(word >> 8), usize::from(code.insns[pc + 1])),
                         0x09 => (
                             usize::from(code.insns[pc + 1]),
@@ -1235,7 +1237,9 @@ impl IntegerDexEngine {
                             dex_index,
                             type_idx,
                         },
-                        RegisterValue::Int(_) => unreachable!("object read validates register type"),
+                        RegisterValue::Int(_) => {
+                            unreachable!("object read validates register type")
+                        }
                     };
                     return Ok(ExecutionReport {
                         return_value,
@@ -1248,9 +1252,9 @@ impl IntegerDexEngine {
                     let (dex_index, dex) =
                         current_dex.ok_or(EngineError::MissingDexContext { pc })?;
                     let type_idx = u32::from(code.insns[pc + 1]);
-                    let descriptor = dex.type_descriptor(type_idx).map_err(|_| {
-                        EngineError::InvalidObjectTypeIndex { pc, type_idx }
-                    })?;
+                    let descriptor = dex
+                        .type_descriptor(type_idx)
+                        .map_err(|_| EngineError::InvalidObjectTypeIndex { pc, type_idx })?;
                     if !(descriptor.starts_with('L') && descriptor.ends_with(';')) {
                         return Err(EngineError::InvalidObjectTypeDescriptor {
                             pc,
@@ -1482,11 +1486,18 @@ fn decode_program(
         let width = match opcode {
             0x00 if word == 0 => 1,
             0x00 => return Err(EngineError::UnsupportedOpcode { pc, opcode }),
-            0x01 | 0x07 | 0x0e | 0x0f | 0x11 | 0x12 | 0x28 | 0x7b..=0x7c
-            | 0x8d..=0x8f | 0xb0..=0xba => 1,
+            0x01
+            | 0x07
+            | 0x0e
+            | 0x0f
+            | 0x11
+            | 0x12
+            | 0x28
+            | 0x7b..=0x7c
+            | 0x8d..=0x8f
+            | 0xb0..=0xba => 1,
             0x0a | 0x0c if allow_static_calls => 1,
-            0x02 | 0x08 | 0x13 | 0x15 | 0x22 | 0x29 | 0x32..=0x3d | 0x90..=0x9a
-            | 0xd0..=0xe2 => 2,
+            0x02 | 0x08 | 0x13 | 0x15 | 0x22 | 0x29 | 0x32..=0x3d | 0x90..=0x9a | 0xd0..=0xe2 => 2,
             0x03 | 0x09 | 0x14 | 0x2a => 3,
             0x71 | 0x77 if allow_static_calls => 3,
             _ => return Err(EngineError::UnsupportedOpcode { pc, opcode }),
@@ -2469,8 +2480,8 @@ mod tests {
                 insns: vec![0x0071, 0x0000, 0x0000, 0x000c, 0x0113, 42, 0x010f],
             },
         ]);
-        let dex = DexFile::parse(&bytes, &crate::dex::DexLimits::default())
-            .expect("parse synthetic DEX");
+        let dex =
+            DexFile::parse(&bytes, &crate::dex::DexLimits::default()).expect("parse synthetic DEX");
 
         let report = execute_static_scalar_method(&dex, TEST_CLASS, "caller", &[])
             .expect("execute object-returning static call");
@@ -2501,8 +2512,8 @@ mod tests {
                 insns: vec![0x0071, 0x0000, 0x0000, 0x000c, 0x0113, 42, 0x010f],
             },
         ]);
-        let dex = DexFile::parse(&bytes, &crate::dex::DexLimits::default())
-            .expect("parse synthetic DEX");
+        let dex =
+            DexFile::parse(&bytes, &crate::dex::DexLimits::default()).expect("parse synthetic DEX");
 
         let report = execute_static_scalar_method(&dex, TEST_CLASS, "caller", &[])
             .expect("execute null-returning static call");
