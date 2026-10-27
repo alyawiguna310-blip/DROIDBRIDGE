@@ -12,6 +12,7 @@
 //! Unsupported instructions are rejected before execution.
 
 use crate::dex::{CodeItem, DexError, DexFile, EncodedMethod, MethodSignature};
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 
@@ -393,6 +394,7 @@ pub fn execute_static_scalar_method_in_dex_set_at(
         });
     }
     let code = dexes[dex_index].code_item(method.code_off)?;
+    let method_index = DexMethodIndex::build(dexes)?;
     let engine = IntegerDexEngine::default();
     let mut budget = ExecutionBudget {
         max_steps: engine.limits.max_instruction_steps,
@@ -407,6 +409,7 @@ pub fn execute_static_scalar_method_in_dex_set_at(
     let mut resolver = |target_method_idx: u32, arguments: &[i32], budget: &mut ExecutionBudget| {
         execute_dex_method_index(
             dexes,
+            &method_index,
             dex_index,
             target_method_idx,
             arguments,
@@ -463,6 +466,7 @@ pub fn execute_static_integer_method(
 
 fn execute_dex_method_index(
     dexes: &[DexFile<'_>],
+    method_index: &DexMethodIndex,
     caller_dex_index: usize,
     method_idx: u32,
     parameters: &[i32],
@@ -477,7 +481,7 @@ fn execute_dex_method_index(
     }
 
     let (dex_index, method, signature) =
-        match find_encoded_method(dexes, caller_dex_index, method_idx) {
+        match find_encoded_method(dexes, method_index, caller_dex_index, method_idx) {
             Ok(resolved) => resolved,
             Err(error) => {
                 // A small, explicit set of framework intrinsics can be modeled
@@ -546,6 +550,7 @@ fn execute_dex_method_index(
     let mut resolver = |child_method_idx: u32, arguments: &[i32], budget: &mut ExecutionBudget| {
         execute_dex_method_index(
             dexes,
+            method_index,
             dex_index,
             child_method_idx,
             arguments,
@@ -613,65 +618,83 @@ fn api30_window_insets_type_intrinsic(
     }
 }
 
+/// A per-execution index avoids repeatedly walking every class and method
+/// for each nested static call. Signatures are DEX-independent; method IDs are not.
+#[derive(Debug, Default)]
+struct DexMethodIndex {
+    definitions: HashMap<MethodSignature, Vec<(usize, EncodedMethod)>>,
+}
+
+impl DexMethodIndex {
+    fn build(dexes: &[DexFile<'_>]) -> Result<Self, DexError> {
+        let mut definitions: HashMap<MethodSignature, Vec<(usize, EncodedMethod)>> =
+            HashMap::new();
+        for (dex_index, dex) in dexes.iter().enumerate() {
+            for class in dex.class_defs() {
+                let Some(data) = dex.class_data(class)? else {
+                    continue;
+                };
+                for method in data
+                    .direct_methods
+                    .iter()
+                    .chain(data.virtual_methods.iter())
+                {
+                    let signature = dex.method_signature(method.method_idx)?;
+                    definitions
+                        .entry(signature)
+                        .or_default()
+                        .push((dex_index, *method));
+                }
+            }
+        }
+        Ok(Self { definitions })
+    }
+}
+
 fn find_encoded_method(
     dexes: &[DexFile<'_>],
+    method_index: &DexMethodIndex,
     caller_dex_index: usize,
     method_idx: u32,
 ) -> Result<(usize, EncodedMethod, MethodSignature), EngineError> {
     let caller_dex = dexes.get(caller_dex_index).ok_or_else(|| {
         static_call_failed(method_idx, "caller DEX index is outside the loaded DEX set")
     })?;
+    // Resolve the ID in its own DEX before looking up the platform-independent signature.
     let signature = caller_dex
         .method_signature(method_idx)
         .map_err(|error| static_call_failed(method_idx, error))?;
+    let Some(declarations) = method_index.definitions.get(&signature) else {
+        return Err(static_call_failed(
+            method_idx,
+            format!(
+                "definition for {} was not found in any loaded DEX file (external/framework code or missing DEX dependency)",
+                method_signature_label(&signature)
+            ),
+        ));
+    };
 
-    // Prefer the caller's own DEX, then search the remaining APK DEX files.
-    let mut declaration_without_code = false;
-    let candidates = std::iter::once(caller_dex_index)
-        .chain((0..dexes.len()).filter(|candidate| *candidate != caller_dex_index));
-    for dex_index in candidates {
-        let dex = &dexes[dex_index];
-        for class in dex.class_defs() {
-            let descriptor = dex
-                .type_descriptor(class.class_idx)
-                .map_err(|error| static_call_failed(method_idx, error))?;
-            if descriptor != signature.class_descriptor {
-                continue;
-            }
-            let data = dex
-                .class_data(class)
-                .map_err(|error| static_call_failed(method_idx, error))?;
-            let Some(data) = data else {
-                continue;
-            };
-            for method in data
-                .direct_methods
-                .iter()
-                .chain(data.virtual_methods.iter())
-            {
-                let candidate_signature = dex
-                    .method_signature(method.method_idx)
-                    .map_err(|error| static_call_failed(method_idx, error))?;
-                if candidate_signature == signature {
-                    if method.code_off != 0 {
-                        return Ok((dex_index, *method, signature));
-                    }
-                    declaration_without_code = true;
-                }
-            }
-        }
+    // Retain the old resolution order: executable definition in the caller's
+    // DEX first, then the first executable matching definition from the bundle.
+    let local = declarations.iter().find(|(dex_index, method)| {
+        *dex_index == caller_dex_index && method.code_off != 0
+    });
+    let selected = local.or_else(|| {
+        declarations
+            .iter()
+            .find(|(dex_index, method)| *dex_index != caller_dex_index && method.code_off != 0)
+    });
+    if let Some((dex_index, method)) = selected {
+        return Ok((*dex_index, *method, signature));
     }
+
     let method_label = method_signature_label(&signature);
-    let reason = if declaration_without_code {
+    Err(static_call_failed(
+        method_idx,
         format!(
             "method {method_label} is declared in loaded DEX metadata but has no code item (native/abstract/external methods are unsupported)"
-        )
-    } else {
-        format!(
-            "definition for {method_label} was not found in any loaded DEX file (external/framework code or missing DEX dependency)"
-        )
-    };
-    Err(static_call_failed(method_idx, reason))
+        ),
+    ))
 }
 
 fn static_call_failed(method_idx: u32, error: impl fmt::Display) -> EngineError {
