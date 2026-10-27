@@ -294,6 +294,42 @@ pub fn execute_static_scalar_method_in_dex_set_at(
     method_name: &str,
     parameters: &[i32],
 ) -> Result<MethodExecutionReport, MethodExecutionError> {
+    DexSetExecutor::new(dexes)?.execute_static_scalar_method_at(
+        root_dex_index,
+        class_descriptor,
+        method_name,
+        parameters,
+    )
+}
+
+/// Reusable executor for one ordered set of parsed DEX files.
+///
+/// Construct this once when executing several candidate root methods (for
+/// example, in a coverage probe) to build the cross-DEX signature index only
+/// once. Use the same parsed DEX slice for the lifetime of this executor.
+#[derive(Debug)]
+pub struct DexSetExecutor<'dexes, 'data> {
+    dexes: &'dexes [DexFile<'data>],
+    method_index: DexMethodIndex,
+}
+
+impl<'dexes, 'data> DexSetExecutor<'dexes, 'data> {
+    pub fn new(dexes: &'dexes [DexFile<'data>]) -> Result<Self, MethodExecutionError> {
+        let method_index = DexMethodIndex::build(dexes)?;
+        Ok(Self {
+            dexes,
+            method_index,
+        })
+    }
+
+    pub fn execute_static_scalar_method_at(
+        &self,
+        root_dex_index: usize,
+        class_descriptor: &str,
+        method_name: &str,
+        parameters: &[i32],
+    ) -> Result<MethodExecutionReport, MethodExecutionError> {
+    let dexes = self.dexes;
     let dex_index = root_dex_index;
     let dex = dexes
         .get(dex_index)
@@ -394,11 +430,10 @@ pub fn execute_static_scalar_method_in_dex_set_at(
         });
     }
     let code = dexes[dex_index].code_item(method.code_off)?;
-    let method_index = DexMethodIndex::build(dexes)?;
     let engine = IntegerDexEngine::default();
     let context = DexExecutionContext {
         dexes,
-        method_index: &method_index,
+        method_index: &self.method_index,
         engine: &engine,
     };
     let mut budget = ExecutionBudget {
@@ -447,6 +482,7 @@ pub fn execute_static_scalar_method_in_dex_set_at(
         signature,
         execution,
     })
+    }
 }
 
 /// Backwards-compatible API name; the supported signature set includes scalar
