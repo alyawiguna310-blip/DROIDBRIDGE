@@ -10,6 +10,7 @@
 //! - [`registry`]: [`ProfileRegistry`] for loading, looking up, and selecting profiles.
 //! - [`errors`]: typed errors for all of the above.
 //! - [`runtime`]: pluggable runtime contracts and the initial Linux Waydroid CLI adapter.
+//! - [`launcher`]: APK package preflight before handing an app to a runtime backend.
 //! - [`dex`]: bounds-checked parser for DEX files (untrusted input).
 //! - [`apk`]: APK inspection (archive, binary manifest, DEX discovery); never executes code.
 
@@ -17,12 +18,16 @@ pub mod apk;
 pub mod config;
 pub mod dex;
 pub mod errors;
+pub mod launcher;
 pub mod profile;
 pub mod registry;
 pub mod runtime;
 
 pub use config::{BridgeConfig, GoogleServicesMode, PerformancePreset};
 pub use errors::{ConfigError, ProfileError, ProfileIdError, RegistryError};
+pub use launcher::{
+    launch_verified_apk, RequiredRuntimeCapability, VerifiedLaunch, VerifiedLaunchError,
+};
 pub use profile::{DeviceProfile, MAX_PROFILE_ID_LEN, validate_profile_id};
 pub use registry::ProfileRegistry;
 pub use runtime::waydroid::WaydroidBackend;
