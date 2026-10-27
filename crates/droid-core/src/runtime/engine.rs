@@ -415,12 +415,20 @@ pub fn execute_static_scalar_method_in_dex_set_at(
             1,
         )
     };
-    let mut execution = engine.execute_with_budget(
-        &code,
-        &normalized_parameters,
-        &mut budget,
-        Some(&mut resolver),
-    )?;
+    let mut execution = engine
+        .execute_with_budget(
+            &code,
+            &normalized_parameters,
+            &mut budget,
+            Some(&mut resolver),
+        )
+        .map_err(|error| match error {
+            EngineError::StaticCallFailed { method_idx, reason } => static_call_failed(
+                method_idx,
+                format!("while executing {}: {reason}", method_signature_label(&signature)),
+            ),
+            other => other,
+        })?;
     match execution.return_value {
         EngineReturn::Int(value) => {
             execution.return_value =
@@ -543,8 +551,15 @@ fn execute_dex_method_index(
             depth + 1,
         )
     };
-    let report =
-        engine.execute_with_budget(&code, &normalized_parameters, budget, Some(&mut resolver))?;
+    let report = engine
+        .execute_with_budget(&code, &normalized_parameters, budget, Some(&mut resolver))
+        .map_err(|error| match error {
+            EngineError::StaticCallFailed { method_idx, reason } => static_call_failed(
+                method_idx,
+                format!("while executing {}: {reason}", method_signature_label(&signature)),
+            ),
+            other => other,
+        })?;
 
     match (signature.return_type.as_str(), report.return_value) {
         ("I" | "Z" | "B" | "S" | "C", EngineReturn::Int(value)) => Ok(EngineReturn::Int(
@@ -1120,7 +1135,19 @@ impl IntegerDexEngine {
                             opcode: instruction.opcode,
                         });
                     };
-                    pending_result = Some(call_resolver(method_idx, &arguments, budget)?);
+                    let result = call_resolver(method_idx, &arguments, budget).map_err(|error| {
+                        static_call_failed(
+                            method_idx,
+                            format!(
+                                "{error}; call site at code unit {pc}: opcode 0x{:02x}, raw code units [{:#06x}, {:#06x}, {:#06x}], encoded argument word count {count}",
+                                instruction.opcode,
+                                code.insns[pc],
+                                code.insns[pc + 1],
+                                code.insns[pc + 2],
+                            ),
+                        )
+                    })?;
+                    pending_result = Some(result);
                 }
                 opcode => return Err(EngineError::UnsupportedOpcode { pc, opcode }),
             }
