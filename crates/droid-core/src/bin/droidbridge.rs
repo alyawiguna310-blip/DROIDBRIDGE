@@ -658,8 +658,20 @@ fn dump_method(
                 code.outs_size,
                 code.insns.len()
             );
-            for (pc, word) in code.insns.iter().copied().enumerate() {
+            const MAX_CODE_UNITS_TO_PRINT: usize = 256;
+            for (pc, word) in code
+                .insns
+                .iter()
+                .copied()
+                .take(MAX_CODE_UNITS_TO_PRINT)
+                .enumerate()
+            {
                 println!("  {pc:04}: 0x{word:04x}");
+            }
+            if code.insns.len() > MAX_CODE_UNITS_TO_PRINT {
+                println!(
+                    "raw dump truncated to the first {MAX_CODE_UNITS_TO_PRINT} code units"
+                );
             }
 
             if let Some(pc) = code_unit_offset {
@@ -912,10 +924,17 @@ mod tests {
                 code_unit_offset: None,
             })
         );
-        assert!(parse_command(args(&[
-            "dump-method", "app.apk", "classes.dex", "LTest;", "answer()I", "not-a-pc"
-        ]))
-        .is_err());
+        assert!(
+            parse_command(args(&[
+                "dump-method",
+                "app.apk",
+                "classes.dex",
+                "LTest;",
+                "answer()I",
+                "not-a-pc"
+            ]))
+            .is_err()
+        );
     }
 
     #[test]
