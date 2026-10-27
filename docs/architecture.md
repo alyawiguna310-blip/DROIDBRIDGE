@@ -8,20 +8,29 @@ DROIDBRIDGE is planned as a shared core with host-specific integrations:
 - LINDROID: Linux frontend and host integration.
 - Shared Rust core: portable settings, profile schema, package metadata, and runtime-backend contracts.
 
+## Platform rollout order
+
+DROIDBRIDGE is being developed **Linux-first** because the current developer workflow and optional Waydroid adapter are Linux-based. The rollout order is:
+
+1. Harden the shared DEX parser and bounded engine on Linux: correct instruction decoding, preserve resource limits, add regression tests, and use real-APK probes to find concrete compatibility gaps.
+2. Validate engine changes with Linux CI and, where available, harmless real APKs. Optimize measured hot paths only after correctness tests are in place; do not treat a higher probe count as proof that an APK runs correctly.
+3. Validate the Linux runtime adapter separately against a live, initialized Waydroid environment. Engine execution and an external Android runtime are separate paths and should not be conflated.
+4. Keep portable core APIs independent of Linux process launchers and host UI. After the Linux interfaces and tests stabilize, add Windows-target build checks and implement a Windows-specific runtime adapter/front end. Waydroid commands are not a Windows backend.
+
 ## Non-goals for the first milestones
 
-The scaffold does not emulate a CPU, implement ART, render Android graphics, provide Android system services, or install Google Play. A project-owned bounded interpreter now executes a small integer-only DEX subset supplied as a parsed code item, but no complete APK or Android application can run through that engine yet.
+The project does not yet implement ART, general object semantics, Android system services, graphics, or full application lifecycle behavior. The bounded DEX engine currently supports only a small scalar instruction subset and constrained static calls; it cannot run a complete APK or Android application end to end.
 
 ## Layers
 
 1. **Host frontend** — native windows, settings, input, accessibility, and host integration.
 2. **DroidCore** — portable configuration, profile schema, runtime-backend contracts, and app metadata models.
-3. **APK inspector** — safe ZIP/APK inspection, manifest parsing, ABI and SDK detection.
-4. **Project-owned execution engine** — the first internal DEX integer interpreter, operating on an already-parsed code item with strict instruction and step limits. It is not ART and cannot load a whole APK.
+3. **APK inspector** — bounded ZIP/APK inspection, manifest parsing, ABI and SDK detection.
+4. **Project-owned execution engine** — a bounded scalar DEX interpreter with constrained static calls across loaded DEX files. It is not ART and cannot load a whole APK.
 5. **External runtime adapter** — a defined core contract plus an optional Linux Waydroid CLI adapter for probing, installing/launching, polling, and stopping apps. Live Waydroid integration has not yet been validated.
-6. **Android application environment** — ART-equivalent class loading, framework APIs, system services, graphics and app lifecycle are still missing.
-6. **Native-code compatibility** — execute compatible host-native libraries directly where possible; use ARM translation only when necessary and supported.
-7. **Google services** — optional, legally provisioned integration evaluated separately for each runtime.
+6. **Android application environment** — ART-equivalent class loading, general framework APIs, system services, graphics, and app lifecycle remain missing.
+7. **Native-code compatibility** — execute compatible host-native libraries directly where possible; use ARM translation only when necessary and supported.
+8. **Google services** — optional, legally provisioned integration evaluated separately for each runtime.
 
 ## Core crate modules
 
