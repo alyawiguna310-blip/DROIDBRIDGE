@@ -51,6 +51,9 @@ pub enum EngineReturn {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RegisterValue {
+    Uninitialized,
+    /// A literal zero is verifier-compatible with either integer zero or null.
+    Zero,
     Int(i32),
     NullReference,
     ObjectReference {
@@ -63,6 +66,8 @@ enum RegisterValue {
 impl RegisterValue {
     fn kind_name(self) -> &'static str {
         match self {
+            Self::Uninitialized => "uninitialized",
+            Self::Zero => "zero constant",
             Self::Int(_) => "integer",
             Self::NullReference => "null reference",
             Self::ObjectReference { .. } => "object reference",
@@ -865,6 +870,10 @@ pub enum EngineError {
         register: usize,
         register_count: usize,
     },
+    UninitializedRegister {
+        pc: usize,
+        register: usize,
+    },
     RegisterTypeMismatch {
         pc: usize,
         register: usize,
@@ -965,6 +974,10 @@ impl fmt::Display for EngineError {
             } => write!(
                 f,
                 "DEX instruction at code unit {pc} accesses register v{register}, but only {register_count} registers exist"
+            ),
+            Self::UninitializedRegister { pc, register } => write!(
+                f,
+                "DEX instruction at code unit {pc} reads uninitialized register v{register}"
             ),
             Self::RegisterTypeMismatch {
                 pc,
@@ -1124,7 +1137,7 @@ impl IntegerDexEngine {
         }
 
         let program = decode_program(&code.insns, resolver.is_some())?;
-        let mut registers = vec![RegisterValue::Int(0); usize::from(code.registers_size)];
+        let mut registers = vec![RegisterValue::Uninitialized; usize::from(code.registers_size)];
         let parameter_start = registers.len() - expected_parameters;
         for (slot, value) in registers[parameter_start..]
             .iter_mut()
@@ -1159,20 +1172,20 @@ impl IntegerDexEngine {
                 0x01 => {
                     let dest = usize::from((word >> 8) & 0x0f);
                     let src = usize::from((word >> 12) & 0x0f);
-                    let value = read_register(&registers, src, pc)?;
-                    write_register(&mut registers, dest, value, pc)?;
+                    let value = read_move_register(&registers, src, pc)?;
+                    write_register_value(&mut registers, dest, value, pc)?;
                 }
                 0x02 => {
                     let dest = usize::from(word >> 8);
                     let src = usize::from(code.insns[pc + 1]);
-                    let value = read_register(&registers, src, pc)?;
-                    write_register(&mut registers, dest, value, pc)?;
+                    let value = read_move_register(&registers, src, pc)?;
+                    write_register_value(&mut registers, dest, value, pc)?;
                 }
                 0x03 => {
                     let dest = usize::from(code.insns[pc + 1]);
                     let src = usize::from(code.insns[pc + 2]);
-                    let value = read_register(&registers, src, pc)?;
-                    write_register(&mut registers, dest, value, pc)?;
+                    let value = read_move_register(&registers, src, pc)?;
+                    write_register_value(&mut registers, dest, value, pc)?;
                 }
                 0x07..=0x09 => {
                     let (dest, src) = match instruction.opcode {
@@ -1237,7 +1250,9 @@ impl IntegerDexEngine {
                             dex_index,
                             type_idx,
                         },
-                        RegisterValue::Int(_) => {
+                        RegisterValue::Uninitialized
+                        | RegisterValue::Zero
+                        | RegisterValue::Int(_) => {
                             unreachable!("object read validates register type")
                         }
                     };
@@ -1286,24 +1301,24 @@ impl IntegerDexEngine {
                     } else {
                         literal
                     };
-                    write_register(&mut registers, dest, value, pc)?;
+                    write_constant_register(&mut registers, dest, value, pc)?;
                 }
                 0x13 => {
                     let dest = usize::from(word >> 8);
                     let value = i32::from(code.insns[pc + 1] as i16);
-                    write_register(&mut registers, dest, value, pc)?;
+                    write_constant_register(&mut registers, dest, value, pc)?;
                 }
                 0x14 => {
                     let dest = usize::from(word >> 8);
                     let value = (u32::from(code.insns[pc + 1])
                         | (u32::from(code.insns[pc + 2]) << 16))
                         as i32;
-                    write_register(&mut registers, dest, value, pc)?;
+                    write_constant_register(&mut registers, dest, value, pc)?;
                 }
                 0x15 => {
                     let dest = usize::from(word >> 8);
                     let value = (u32::from(code.insns[pc + 1]) << 16) as i32;
-                    write_register(&mut registers, dest, value, pc)?;
+                    write_constant_register(&mut registers, dest, value, pc)?;
                 }
                 0x7b..=0x7c | 0x8d..=0x8f => {
                     let dest = usize::from((word >> 8) & 0x0f);
@@ -1608,6 +1623,8 @@ fn read_register(
         })?;
     match value {
         RegisterValue::Int(value) => Ok(value),
+        RegisterValue::Zero => Ok(0),
+        RegisterValue::Uninitialized => Err(EngineError::UninitializedRegister { pc, register }),
         other => Err(EngineError::RegisterTypeMismatch {
             pc,
             register,
@@ -1617,10 +1634,35 @@ fn read_register(
     }
 }
 
-fn write_register(
+fn read_move_register(
+    registers: &[RegisterValue],
+    register: usize,
+    pc: usize,
+) -> Result<RegisterValue, EngineError> {
+    let value = registers
+        .get(register)
+        .copied()
+        .ok_or(EngineError::InvalidRegister {
+            pc,
+            register,
+            register_count: registers.len(),
+        })?;
+    match value {
+        RegisterValue::Int(_) | RegisterValue::Zero => Ok(value),
+        RegisterValue::Uninitialized => Err(EngineError::UninitializedRegister { pc, register }),
+        other => Err(EngineError::RegisterTypeMismatch {
+            pc,
+            register,
+            expected: "integer or zero constant",
+            actual: other.kind_name(),
+        }),
+    }
+}
+
+fn write_register_value(
     registers: &mut [RegisterValue],
     register: usize,
-    value: i32,
+    value: RegisterValue,
     pc: usize,
 ) -> Result<(), EngineError> {
     let count = registers.len();
@@ -1631,8 +1673,31 @@ fn write_register(
             register,
             register_count: count,
         })?;
-    *slot = RegisterValue::Int(value);
+    *slot = value;
     Ok(())
+}
+
+fn write_constant_register(
+    registers: &mut [RegisterValue],
+    register: usize,
+    value: i32,
+    pc: usize,
+) -> Result<(), EngineError> {
+    let value = if value == 0 {
+        RegisterValue::Zero
+    } else {
+        RegisterValue::Int(value)
+    };
+    write_register_value(registers, register, value, pc)
+}
+
+fn write_register(
+    registers: &mut [RegisterValue],
+    register: usize,
+    value: i32,
+    pc: usize,
+) -> Result<(), EngineError> {
+    write_register_value(registers, register, RegisterValue::Int(value), pc)
 }
 
 fn read_object_register(
@@ -1650,8 +1715,9 @@ fn read_object_register(
         })?;
     match value {
         RegisterValue::NullReference | RegisterValue::ObjectReference { .. } => Ok(value),
-        // DEX's verifier treats a zero constant used in a reference context as null.
-        RegisterValue::Int(0) => Ok(RegisterValue::NullReference),
+        // Only a literal zero retains DEX's verifier-compatible "zero" type.
+        RegisterValue::Zero => Ok(RegisterValue::NullReference),
+        RegisterValue::Uninitialized => Err(EngineError::UninitializedRegister { pc, register }),
         RegisterValue::Int(_) => Err(EngineError::RegisterTypeMismatch {
             pc,
             register,
@@ -1714,6 +1780,24 @@ fn compare_zero(opcode: u8, value: i32) -> bool {
     }
 }
 
+fn ensure_initialized(value: RegisterValue, register: usize, pc: usize) -> Result<(), EngineError> {
+    if matches!(value, RegisterValue::Uninitialized) {
+        Err(EngineError::UninitializedRegister { pc, register })
+    } else {
+        Ok(())
+    }
+}
+
+fn integer_value(value: RegisterValue) -> Option<i32> {
+    match value {
+        RegisterValue::Int(value) => Some(value),
+        RegisterValue::Zero => Some(0),
+        RegisterValue::Uninitialized
+        | RegisterValue::NullReference
+        | RegisterValue::ObjectReference { .. } => None,
+    }
+}
+
 fn is_reference_value(value: RegisterValue) -> bool {
     matches!(
         value,
@@ -1729,19 +1813,21 @@ fn compare_register_values(
     right_reg: usize,
     pc: usize,
 ) -> Result<bool, EngineError> {
+    ensure_initialized(left, left_reg, pc)?;
+    ensure_initialized(right, right_reg, pc)?;
+
     if opcode == 0x32 || opcode == 0x33 {
         let left_is_reference = is_reference_value(left);
         let right_is_reference = is_reference_value(right);
-        let left_zero_as_null = matches!(left, RegisterValue::Int(0)) && right_is_reference;
-        let right_zero_as_null = matches!(right, RegisterValue::Int(0)) && left_is_reference;
+        let left_zero_as_null = matches!(left, RegisterValue::Zero) && right_is_reference;
+        let right_zero_as_null = matches!(right, RegisterValue::Zero) && left_is_reference;
 
         let equal = if left_zero_as_null
             || right_zero_as_null
             || (left_is_reference && right_is_reference)
         {
-            let left_is_null = matches!(left, RegisterValue::NullReference | RegisterValue::Int(0));
-            let right_is_null =
-                matches!(right, RegisterValue::NullReference | RegisterValue::Int(0));
+            let left_is_null = matches!(left, RegisterValue::NullReference | RegisterValue::Zero);
+            let right_is_null = matches!(right, RegisterValue::NullReference | RegisterValue::Zero);
             match (left_is_null, right_is_null) {
                 (true, true) => true,
                 (false, false) => match (left, right) {
@@ -1759,10 +1845,10 @@ fn compare_register_values(
                 _ => false,
             }
         } else {
-            match (left, right) {
-                (RegisterValue::Int(left), RegisterValue::Int(right)) => left == right,
+            match (integer_value(left), integer_value(right)) {
+                (Some(left), Some(right)) => left == right,
                 _ => {
-                    let (register, actual) = if !matches!(left, RegisterValue::Int(_)) {
+                    let (register, actual) = if integer_value(left).is_none() {
                         (left_reg, left.kind_name())
                     } else {
                         (right_reg, right.kind_name())
@@ -1779,10 +1865,10 @@ fn compare_register_values(
         return Ok(if opcode == 0x32 { equal } else { !equal });
     }
 
-    match (left, right) {
-        (RegisterValue::Int(left), RegisterValue::Int(right)) => Ok(compare(opcode, left, right)),
+    match (integer_value(left), integer_value(right)) {
+        (Some(left), Some(right)) => Ok(compare(opcode, left, right)),
         _ => {
-            let (register, actual) = if !matches!(left, RegisterValue::Int(_)) {
+            let (register, actual) = if integer_value(left).is_none() {
                 (left_reg, left.kind_name())
             } else {
                 (right_reg, right.kind_name())
@@ -1805,6 +1891,8 @@ fn compare_register_zero(
 ) -> Result<bool, EngineError> {
     match value {
         RegisterValue::Int(value) => Ok(compare_zero(opcode, value)),
+        RegisterValue::Zero => Ok(compare_zero(opcode, 0)),
+        RegisterValue::Uninitialized => Err(EngineError::UninitializedRegister { pc, register }),
         RegisterValue::NullReference if opcode == 0x38 => Ok(true),
         RegisterValue::NullReference if opcode == 0x39 => Ok(false),
         RegisterValue::ObjectReference { .. } if opcode == 0x38 => Ok(false),
@@ -1934,6 +2022,41 @@ mod tests {
     }
 
     #[test]
+    fn rejects_reads_from_uninitialized_registers() {
+        let method = code(1, 0, &[0x000f]); // return v0 without assigning it
+        assert_eq!(
+            run(&method, &[]),
+            Err(EngineError::UninitializedRegister { pc: 0, register: 0 })
+        );
+    }
+
+    #[test]
+    fn preserves_zero_literal_through_generic_move_as_null_compatible() {
+        // const/4 v0, 0; move v1, v0; move-object v2, v1; return-object v2
+        let method = code(3, 0, &[0x0012, 0x0101, 0x1207, 0x0211]);
+        assert_eq!(
+            run(&method, &[]).map(|report| report.return_value),
+            Ok(EngineReturn::NullReference)
+        );
+    }
+
+    #[test]
+    fn rejects_computed_integer_zero_in_reference_context() {
+        // const/4 v0, 1; const/4 v1, -1; add-int v0, v0, v1;
+        // move-object v1, v0; return-object v1
+        let method = code(2, 0, &[0x1012, 0xf112, 0x0090, 0x0100, 0x0107, 0x0111]);
+        assert_eq!(
+            run(&method, &[]),
+            Err(EngineError::RegisterTypeMismatch {
+                pc: 4,
+                register: 0,
+                expected: "object reference or null",
+                actual: "integer",
+            })
+        );
+    }
+
+    #[test]
     fn executes_all_integer_literal_arithmetic_opcodes() {
         let cases: &[(u8, i32)] = &[
             (0xd0, 15),
@@ -2029,7 +2152,7 @@ mod tests {
     #[test]
     fn rejects_division_by_zero() {
         // const/4 v0, 1; const/4 v1, 0; div-int v2, v0, v1
-        let method = code(3, 0, &[0x1012, 0x0012, 0x0293, 0x0100, 0x020f]);
+        let method = code(3, 0, &[0x1012, 0x0112, 0x0293, 0x0100, 0x020f]);
         assert_eq!(
             run(&method, &[]),
             Err(EngineError::DivisionByZero { pc: 2 })
@@ -2118,6 +2241,45 @@ mod tests {
             Err(EngineError::MissingReturn { pc: 1 })
         );
     }
+    #[test]
+    fn resolves_symbolic_object_return_from_static_callee() {
+        // makeObject creates an opaque reference token; isNonNull receives it
+        // through move-result-object and branches on it without dereferencing it.
+        let bytes = build_dex(&[
+            TestMethod {
+                name: "makeObject",
+                return_type: "Ljava/lang/Object;",
+                params: vec![],
+                registers: 1,
+                ins: 0,
+                outs: 0,
+                // new-instance v0, type@1; return-object v0
+                insns: vec![0x0022, 0x0001, 0x0011],
+            },
+            TestMethod {
+                name: "isNonNull",
+                return_type: "I",
+                params: vec![],
+                registers: 1,
+                ins: 0,
+                outs: 0,
+                // invoke-static {}, method@0; move-result-object v0;
+                // if-eqz v0, +4; const/4 v0, 1; return v0;
+                // const/4 v0, 0; return v0
+                insns: vec![
+                    0x0071, 0x0000, 0x0000, 0x000c, 0x0038, 0x0004, 0x1012, 0x000f, 0x0012, 0x000f,
+                ],
+            },
+        ]);
+        let dex =
+            DexFile::parse(&bytes, &crate::dex::DexLimits::default()).expect("parse synthetic DEX");
+
+        let report = execute_static_scalar_method(&dex, TEST_CLASS, "isNonNull", &[])
+            .expect("execute static caller that receives a symbolic object reference");
+
+        assert_eq!(report.execution.return_value, EngineReturn::Int(1));
+    }
+
     #[test]
     fn resolves_and_executes_an_integer_method_from_real_dex_metadata() {
         let bytes = build_dex(&[TestMethod {
