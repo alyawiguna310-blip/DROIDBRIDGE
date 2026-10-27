@@ -68,6 +68,16 @@ The public `launch_verified_apk` orchestration function creates a narrow pre-ins
 
 The preflight prevents an accidental manifest/request package mismatch and stops before backend launch when inspection, readiness, or capability checks fail. It does not sandbox APK code, check every app-level compatibility condition, apply device-profile spoofing, or guarantee that the Android runtime can run an app. Live Waydroid testing remains necessary.
 
+## Command-line entry point
+
+The `droidbridge` binary exposes three paths into the shared core:
+
+- `inspect <apk-path>` runs the bounded APK inspector and prints manifest, DEX, and native-library summaries without executing the APK.
+- `status` probes the existing Waydroid installation/session and prints known adapter capabilities.
+- `launch <apk-path> <package-name> [profile-id]` uses `launch_verified_apk`, so inspection and exact manifest-package matching happen before the Waydroid adapter is allowed to install or launch. It polls for the app process and exits after observing it or reporting failure.
+
+This CLI is an operational entry point, not an Android emulator. Waydroid must already be installed, initialized, and running. The optional profile id currently passes through `LaunchRequest` as metadata; the CLI does not yet load the profile registry or alter Android-visible device identity. A successful Waydroid command and an observed process are useful smoke-test signals, but do not prove app compatibility, correct rendering, input integration, or lifecycle behavior. Those still require a live test with a harmless APK.
+
 ## DEX parsing
 
 `dex::DexFile::parse` validates the header (magic, version 035-039, header size, endian tag, file size, Adler-32 checksum, section bounds) and the string, type, proto, field, method and class-definition tables, including every stored index. Strings, class data and code items are decoded lazily by bounds-checked accessors. Counts read from the file are checked against the bytes actually present before anything is allocated, and every failure is a `DexError`.
