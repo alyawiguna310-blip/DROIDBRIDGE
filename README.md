@@ -101,9 +101,9 @@ Run the CLI from the workspace root:
 
 ```sh
 cargo run -p droid-core --bin droidbridge -- help
-cargo run -p droid-core --bin droidbridge -- inspect -- "/path/to/app.apk"
+cargo run -p droid-core --bin droidbridge -- inspect "/path/to/app.apk"
 cargo run -p droid-core --bin droidbridge -- status
-cargo run -p droid-core --bin droidbridge -- launch -- "/path/to/app.apk" com.example.app POCO_F6
+cargo run -p droid-core --bin droidbridge -- launch "/path/to/app.apk" com.example.app POCO_F6
 ```
 
 - `inspect` prints the parsed manifest metadata, permissions, DEX parse results, native-library names, and warnings. It does not install or execute the APK.
