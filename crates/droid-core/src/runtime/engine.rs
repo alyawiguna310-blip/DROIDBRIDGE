@@ -1142,16 +1142,22 @@ impl IntegerDexEngine {
                         });
                     };
                     let result = call_resolver(method_idx, &arguments, budget).map_err(|error| {
-                        static_call_failed(
-                            method_idx,
-                            format!(
-                                "{error}; call site at code unit {pc}: opcode 0x{:02x}, raw code units [{:#06x}, {:#06x}, {:#06x}], encoded argument word count {count}",
-                                instruction.opcode,
-                                code.insns[pc],
-                                code.insns[pc + 1],
-                                code.insns[pc + 2],
+                        match error {
+                            EngineError::StaticCallFailed {
+                                method_idx: failed_method_idx,
+                                reason,
+                            } => static_call_failed(
+                                failed_method_idx,
+                                format!(
+                                    "{reason}; call site at code unit {pc}: opcode 0x{:02x}, raw code units [{:#06x}, {:#06x}, {:#06x}], encoded argument word count {count}",
+                                    instruction.opcode,
+                                    code.insns[pc],
+                                    code.insns[pc + 1],
+                                    code.insns[pc + 2],
+                                ),
                             ),
-                        )
+                            other => other,
+                        }
                     })?;
                     pending_result = Some(result);
                 }
