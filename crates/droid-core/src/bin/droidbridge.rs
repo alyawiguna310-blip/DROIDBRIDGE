@@ -44,6 +44,11 @@ fn run() -> Result<(), Box<dyn Error>> {
             dex_entry,
             class_descriptor,
         } => list_methods(&apk, &dex_entry, class_descriptor.as_deref())?,
+        CliCommand::ProbeMethods {
+            apk,
+            dex_entry,
+            class_descriptor,
+        } => probe_methods(&apk, &dex_entry, class_descriptor.as_deref())?,
         CliCommand::RunMethod {
             apk,
             dex_entry,
@@ -75,6 +80,11 @@ enum CliCommand {
     Status,
     EngineDemo,
     Methods {
+        apk: PathBuf,
+        dex_entry: String,
+        class_descriptor: Option<String>,
+    },
+    ProbeMethods {
         apk: PathBuf,
         dex_entry: String,
         class_descriptor: Option<String>,
@@ -113,6 +123,14 @@ where
         }),
         "status" if arguments.len() == 1 => Ok(CliCommand::Status),
         "engine-demo" if arguments.len() == 1 => Ok(CliCommand::EngineDemo),
+        "probe-methods" if (3..=4).contains(&arguments.len()) => Ok(CliCommand::ProbeMethods {
+            apk: PathBuf::from(&arguments[1]),
+            dex_entry: utf8_arg(&arguments, 2, "DEX entry")?,
+            class_descriptor: arguments
+                .get(3)
+                .map(|_| utf8_arg(&arguments, 3, "class descriptor"))
+                .transpose()?,
+        }),
         "methods" if (3..=4).contains(&arguments.len()) => Ok(CliCommand::Methods {
             apk: PathBuf::from(&arguments[1]),
             dex_entry: utf8_arg(&arguments, 2, "DEX entry")?,
@@ -166,6 +184,9 @@ where
         "inspect" => Err("usage: droidbridge inspect <apk-path>".to_owned()),
         "status" => Err("usage: droidbridge status".to_owned()),
         "engine-demo" => Err("usage: droidbridge engine-demo".to_owned()),
+        "probe-methods" => Err(
+            "usage: droidbridge probe-methods <apk-path> <dex-entry> [class-descriptor]".to_owned()
+        ),
         "methods" => Err(
             "usage: droidbridge methods <apk-path> <dex-entry> [class-descriptor]".to_owned()
         ),
@@ -189,6 +210,7 @@ fn print_usage() {
            droidbridge status\n\
            droidbridge engine-demo\n\
            droidbridge methods <apk-path> <dex-entry> [class-descriptor]\n\
+           droidbridge probe-methods <apk-path> <dex-entry> [class-descriptor]\n\
            droidbridge run-method <apk-path> <dex-entry> <class-descriptor> <method-name> [integer-argument ...]\n\
            droidbridge launch <apk-path> <package-name> [profile-id]\n\
            droidbridge help\n\n\
@@ -197,6 +219,7 @@ fn print_usage() {
            status       Probe the existing Waydroid installation/session.\n\
            engine-demo  Run a synthetic integer method in our own DEX engine.\n\
            methods      List static int(int, ...) method signature candidates.\n\
+           probe-methods Execute up to 20 candidates with zero integer arguments to measure current engine coverage.\n\
            run-method   Execute a supported static integer method from actual DEX metadata.\n\
            launch       Verify the APK package and backend before delegating launch.\n\n\
          Method execution supports only a small DEX instruction subset; it does not run a whole APK."
@@ -259,6 +282,68 @@ fn list_methods(
     if methods.len() > MAX_METHODS_TO_PRINT {
         println!(
             "output truncated to the first {MAX_METHODS_TO_PRINT} candidates; provide a class descriptor to narrow the list"
+        );
+    }
+    Ok(())
+}
+
+fn probe_methods(
+    apk: &std::path::Path,
+    dex_entry: &str,
+    class_filter: Option<&str>,
+) -> Result<(), Box<dyn Error>> {
+    const MAX_PROBE_METHODS: usize = 20;
+    let limits = ApkLimits::default();
+    let mut bytes = Vec::new();
+    let dex = load_dex_from_apk(apk, dex_entry, &limits, &mut bytes)?;
+    let candidates = list_static_integer_methods(&dex, class_filter)?;
+    let attempts = candidates.len().min(MAX_PROBE_METHODS);
+
+    println!(
+        "probing {attempts} of {} static integer method candidates with zero-valued arguments",
+        candidates.len()
+    );
+    println!(
+        "This is a coverage probe, not a correctness test; methods may require nonzero inputs."
+    );
+
+    let mut executed = 0usize;
+    let mut refused = 0usize;
+    for signature in candidates.iter().take(attempts) {
+        let parameters = vec![0; signature.parameter_types.len()];
+        match execute_static_integer_method(
+            &dex,
+            &signature.class_descriptor,
+            &signature.name,
+            &parameters,
+        ) {
+            Ok(report) => {
+                executed += 1;
+                println!(
+                    "  EXECUTED {}->{}({})I => {:?} ({} total steps including callees)",
+                    signature.class_descriptor,
+                    signature.name,
+                    signature.parameter_types.join(","),
+                    report.execution.return_value,
+                    report.execution.instruction_steps
+                );
+            }
+            Err(error) => {
+                refused += 1;
+                println!(
+                    "  REFUSED  {}->{}({})I: {error}",
+                    signature.class_descriptor,
+                    signature.name,
+                    signature.parameter_types.join(",")
+                );
+            }
+        }
+    }
+    println!("probe summary: {executed} executed, {refused} refused");
+    if candidates.len() > attempts {
+        println!(
+            "remaining candidates not attempted: {}; use a class descriptor to narrow the probe",
+            candidates.len() - attempts
         );
     }
     Ok(())
@@ -471,6 +556,32 @@ mod tests {
                 profile: "MY_DEVICE".to_owned(),
             })
         );
+    }
+
+    #[test]
+    fn parses_probe_methods_command_with_optional_class_filter() {
+        assert_eq!(
+            parse_command(args(&[
+                "probe-methods",
+                "app.apk",
+                "classes.dex",
+                "LTest;"
+            ])),
+            Ok(CliCommand::ProbeMethods {
+                apk: PathBuf::from("app.apk"),
+                dex_entry: "classes.dex".to_owned(),
+                class_descriptor: Some("LTest;".to_owned()),
+            })
+        );
+        assert_eq!(
+            parse_command(args(&["probe-methods", "app.apk", "classes.dex"])),
+            Ok(CliCommand::ProbeMethods {
+                apk: PathBuf::from("app.apk"),
+                dex_entry: "classes.dex".to_owned(),
+                class_descriptor: None,
+            })
+        );
+        assert!(parse_command(args(&["probe-methods", "app.apk"])).is_err());
     }
 
     #[test]
