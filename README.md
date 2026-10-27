@@ -7,7 +7,7 @@
 
 The shared core is intended to manage APK metadata, portable device profiles, runtime backends, and performance settings. The long-term goal is to run Android apps and games in host-integrated windows while using the host machine's actual CPU and GPU.
 
-> **Status: early scaffold.** This repository still has not demonstrated launching a real Android APK. It can inspect APKs, and its project-owned `runtime::engine::IntegerDexEngine` executes a small bounded subset of integer-only DEX methods supplied as parsed code items. A separate Linux Waydroid adapter and verified-launch preflight are also present, but live Waydroid installation, app compatibility, graphics, and full Android framework/ART behavior have not been validated.
+> **Status: Linux-first engine work in progress.** The repository can inspect APKs and execute a bounded subset of scalar DEX methods, including constrained static calls across an APK's DEX files. Recent Linux CI tests pass, but a complete Android APK still does not run end to end, and the latest corrected invocation decoder needs another real-APK probe. The optional Linux Waydroid adapter has not yet been validated against a live installation. Windows support remains a later phase; the shared Rust core is being kept host-agnostic so it can be reused.
 
 ## Initial configuration
 
@@ -175,14 +175,15 @@ The first build downloads the `zip` crate, which updates `Cargo.lock`.
 ## Roadmap
 
 1. Validate portable configuration and host/device profile separation. (done)
-2. Implement APK archive inspection and manifest metadata extraction. (done, no execution)
-3. DEX instruction decoding and a minimal interpreter.
-4. Define a replaceable runtime backend interface and backend capability report. (contract plus initial Waydroid CLI adapter implemented; live runtime not yet validated)
-5. Evaluate and integrate existing Android runtimes separately for Windows and Linux. (Waydroid CLI path implemented for Linux; real APK launch not yet validated)
-6. Validate execution of a real APK, graphics, input, and lifecycle.
-7. Investigate ARM64 native-library translation where required.
-8. Evaluate legitimate Google Play support and its certification constraints.
-9. Benchmark RAM, CPU, GPU, startup time, and portability across machines.
+2. Implement bounded APK inspection and manifest metadata extraction. (done; inspection is not execution)
+3. **Linux-first engine hardening:** DEX invocation decoding, cross-DEX method resolution, bounded scalar execution, regression coverage, and real-APK probes. (in progress; not a complete Android runtime)
+4. Optimize measured hot paths in the shared Rust core while preserving resource limits and explicit unsupported-feature errors. (signature index added; performance still needs benchmarking)
+5. Validate a supported Linux runtime backend with a harmless APK, including installation, launch, input, graphics, and lifecycle. (Waydroid adapter exists; live validation remains)
+6. Stabilize platform-neutral core APIs and add Windows-target CI/build checks.
+7. Implement a Windows host frontend and a Windows-appropriate Android runtime adapter; do not reuse the Linux Waydroid adapter as if it were cross-platform.
+8. Investigate ARM64 native-library translation where required.
+9. Evaluate legitimate Google Play support and its certification constraints.
+10. Benchmark RAM, CPU, GPU, startup time, and portability across machines.
 
 ## Licensing
 
