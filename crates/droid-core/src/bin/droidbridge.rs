@@ -6,8 +6,8 @@
 //! compatibility or graphics correctness.
 
 use droid_core::apk::{ApkLimits, ApkReport, inspect_file};
-use droid_core::launcher::launch_verified_apk;
 use droid_core::dex::CodeItem;
+use droid_core::launcher::launch_verified_apk;
 use droid_core::runtime::engine::{EngineReturn, IntegerDexEngine};
 use droid_core::runtime::{
     LaunchRequest, RuntimeBackend, RuntimeSession, RuntimeSessionState, waydroid::WaydroidBackend,
