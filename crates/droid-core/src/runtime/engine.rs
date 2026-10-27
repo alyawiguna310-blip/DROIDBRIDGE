@@ -1187,7 +1187,7 @@ mod tests {
     #[test]
     fn executes_unary_integer_and_narrowing_opcodes() {
         for (opcode, input, expected) in [
-            (0x7b, 12_i32, -12_i32),
+            (0x7b_u8, 12_i32, -12_i32),
             (0x7c, 0_i32, -1_i32),
             (0x8d, 255_i32, -1_i32),
             (0x8e, -1_i32, 65_535_i32),
