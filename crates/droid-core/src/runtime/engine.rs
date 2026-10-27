@@ -538,7 +538,7 @@ mod tests {
         let method = code(
             3,
             0,
-            &[0x1012, 0x1012, 0x1032, 4, 0x2212, 0x020f, 0x3212, 0x020f],
+            &[0x1012, 0x1112, 0x1032, 4, 0x2212, 0x020f, 0x3212, 0x020f],
         );
         assert_eq!(run(&method, &[]).unwrap().return_value, EngineReturn::Int(3));
     }
