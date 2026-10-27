@@ -2,7 +2,7 @@
 //!
 //! This crate does not launch APKs end-to-end or spoof hardware directly.
 //! It includes an experimental bounded DEX interpreter for scalar integer-like
-//! instructions and constrained same-DEX calls, but not the full Android runtime.
+//! instructions and constrained cross-DEX calls, but not the full Android runtime.
 //! Configurable Android-facing properties stay separate from detected host
 //! capabilities so profiles cannot silently imply unsupported host features.
 //!
@@ -36,7 +36,9 @@ pub use registry::ProfileRegistry;
 pub use runtime::engine::{
     EngineError, EngineLimits, EngineReturn, ExecutionReport, IntegerDexEngine,
     MethodExecutionError, MethodExecutionReport, execute_static_integer_method,
-    execute_static_scalar_method, list_static_integer_methods, list_static_scalar_methods,
+    execute_static_scalar_method, execute_static_scalar_method_in_dex_set,
+    execute_static_scalar_method_in_dex_set_at, list_static_integer_methods,
+    list_static_scalar_methods,
 };
 pub use runtime::waydroid::WaydroidBackend;
 pub use runtime::{
