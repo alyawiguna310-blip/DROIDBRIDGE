@@ -93,7 +93,7 @@ This contract is not an emulator. The initial `WaydroidBackend` calls the docume
 
 ## Project-owned DEX execution engine
 
-The `runtime::engine::IntegerDexEngine` module is our own initial execution component. It does not call Waydroid or another Android runtime. It accepts a parsed `CodeItem` and runs a tightly limited set of DEX instructions with 32-bit integer registers.
+The `runtime::engine::IntegerDexEngine` module is our own initial execution component. It does not call Waydroid or another Android runtime. It can now resolve a static integer method from actual parsed DEX metadata and execute that method's `CodeItem`, in addition to accepting synthetic code items for tests.
 
 Supported instruction families include moves, integer constants, returns, goto branches, integer comparisons, and integer arithmetic/bitwise operations. It rejects unsupported opcodes and methods with exception-handler tables. It checks branch targets are instruction boundaries and imposes configurable code-size and instruction-step limits.
 
@@ -116,6 +116,16 @@ assert_eq!(result.return_value, EngineReturn::Int(42));
 # Ok::<(), droid_core::runtime::engine::EngineError>(())
 ```
 
+You can inspect method candidates and execute a supported static integer method directly from an APK:
+
+```sh
+cargo run -p droid-core --bin droidbridge -- methods "/path/to/app.apk" classes.dex
+cargo run -p droid-core --bin droidbridge -- methods "/path/to/app.apk" classes.dex 'Lexample/Calculator;'
+cargo run -p droid-core --bin droidbridge -- run-method "/path/to/app.apk" classes.dex 'Lexample/Calculator;' sum 19 23
+```
+
+The method-listing command reports metadata-compatible candidates (static methods returning `int` with only `int` parameters); it does not promise every body uses supported instructions. The execution command reads the selected DEX entry through the bounded APK archive reader, parses it, resolves the class and method from DEX tables/class data, and executes the decoded code item. It accepts static `int(int, ...)` methods only. It rejects absent methods, wrong argument counts, unsupported signatures/opcodes, and methods containing exception-handler tables. A class descriptor contains semicolons, so quote it in shells such as Bash.
+
 This is a genuine first step toward an internal runtime, not a complete JVM/ART implementation. It does not yet perform class loading, method invocation, object allocation, field access, arrays, Android framework calls, native execution, app lifecycle, or graphics. It cannot run APKPure or ordinary APKs end to end. Waydroid remains a separate optional adapter for live Android app execution while the internal engine grows.
 
 ## Verified APK launch preflight
@@ -133,12 +143,16 @@ cargo run -p droid-core --bin droidbridge -- help
 cargo run -p droid-core --bin droidbridge -- inspect "/path/to/app.apk"
 cargo run -p droid-core --bin droidbridge -- status
 cargo run -p droid-core --bin droidbridge -- engine-demo
+cargo run -p droid-core --bin droidbridge -- methods "/path/to/app.apk" classes.dex
+cargo run -p droid-core --bin droidbridge -- run-method "/path/to/app.apk" classes.dex 'Lexample/Calculator;' sum 19 23
 cargo run -p droid-core --bin droidbridge -- launch "/path/to/app.apk" com.example.app POCO_F6
 ```
 
 - `inspect` prints the parsed manifest metadata, permissions, DEX parse results, native-library names, and warnings. It does not install or execute the APK.
 - `status` probes the existing Waydroid environment and prints the adapter's declared capabilities.
 - `engine-demo` executes a synthetic integer DEX method entirely in DROIDBRIDGE's own engine and should print `return: 42`; it does not need Waydroid.
+- `methods` lists static integer-returning method candidates from one DEX entry; an optional class descriptor narrows output.
+- `run-method` resolves a static `int(int, ...)` method from DEX metadata and executes it in the internal engine, without Waydroid. Only the current instruction subset is supported.
 - `launch` runs the verified preflight before delegating to Waydroid, then waits for the target process to be observed. The package name must exactly match the APK manifest. If omitted, the profile id defaults to `POCO_F6`.
 
 The CLI does not install or initialize Waydroid, start its session, apply device-identity spoofing, or prove general app compatibility. The profile id is currently carried as launch-request metadata only. A real launch has not yet been verified on a live Waydroid installation.

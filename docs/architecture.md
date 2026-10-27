@@ -35,7 +35,8 @@ The scaffold does not emulate a CPU, implement ART, render Android graphics, pro
 - `runtime::engine` — the project-owned `IntegerDexEngine`: bounded execution for a small integer-only DEX subset, with branch-boundary validation, register checks, typed errors, and an instruction-step limit. It works on parsed code items and is not a whole-APK runtime.
 - `runtime::waydroid::WaydroidBackend` — an optional Linux adapter around the documented external Waydroid CLI; it has mocked-command tests but has not been tested against a live Waydroid installation.
 - `launcher` — verified launch preflight: inspect the APK, match the manifest package, require backend readiness and explicitly supported install/launch capabilities, then invoke the adapter.
-- `dex` — bounds-checked DEX parser (header, id tables, class data, code items). Parsing only; see "DEX parsing" below.
+- `dex` — bounds-checked DEX parser (header, id tables, class data, code items); execution is a separate layer.
+- `apk::read_dex_entry` — reads one recognized top-level DEX entry through the validated archive reader and configured size/read limits; it never extracts the entry to disk.
 - `apk` — APK inspection (archive, binary manifest, DEX discovery, native library names). Inspection only; see "APK inspection" below.
 
 ## Profile identity and the registry
@@ -78,13 +79,17 @@ The `droidbridge` binary exposes four paths into the shared core:
 - `inspect <apk-path>` runs the bounded APK inspector and prints manifest, DEX, and native-library summaries without executing the APK.
 - `status` probes the existing Waydroid installation/session and prints known adapter capabilities.
 - `engine-demo` runs a synthetic integer method in the project-owned `IntegerDexEngine` without Waydroid, demonstrating the internal engine independently of an Android installation.
+- `methods` lists static `int(int, ...)` candidates from one DEX entry.
+- `run-method` resolves and executes a selected static integer method from the DEX tables and class data. Unsupported instructions or signatures fail explicitly.
 - `launch <apk-path> <package-name> [profile-id]` uses `launch_verified_apk`, so inspection and exact manifest-package matching happen before the Waydroid adapter is allowed to install or launch. It polls for the app process and exits after observing it or reporting failure.
 
 This CLI is an operational entry point, not an Android emulator. Waydroid must already be installed, initialized, and running. The optional profile id currently passes through `LaunchRequest` as metadata; the CLI does not yet load the profile registry or alter Android-visible device identity. A successful Waydroid command and an observed process are useful smoke-test signals, but do not prove app compatibility, correct rendering, input integration, or lifecycle behavior. Those still require a live test with a harmless APK.
 
 ## Project-owned DEX integer engine
 
-`runtime::engine::IntegerDexEngine` is the first internal execution component, written in this repository and separate from the Waydroid adapter. Its input is an already parsed `dex::CodeItem`; callers supply 32-bit integer parameters, which are placed in the final input registers. The method runs in a bounded register frame and returns either void or a 32-bit integer plus the instruction-step count.
+`runtime::engine::IntegerDexEngine` is the first internal execution component, written in this repository and separate from the Waydroid adapter. It can run an already parsed `dex::CodeItem` or resolve a static integer method (`int(int, ...)`) from a parsed `DexFile`. The resolver walks class definitions and class data, resolves the signature and code offset, then passes the method's real code units to the interpreter. The caller supplies 32-bit integer parameters, which are placed in the final input registers. Execution occurs in a bounded register frame and returns a 32-bit integer plus the instruction-step count.
+
+The CLI exposes `methods <apk> <dex-entry> [class-descriptor]` to list static integer method signature candidates and `run-method <apk> <dex-entry> <class-descriptor> <method-name> [integer-argument ...]` to attempt execution. The APK DEX reader uses the project's bounded archive validator, and the selected DEX is parsed with the normal bounds-checked parser before method lookup. Listing checks method metadata only; actual instruction support is established only when the interpreter decodes and executes the method. This still does not load a whole application.
 
 The supported subset includes no-op and move instructions; integer constants; return instructions; goto branches; integer comparison branches; integer arithmetic and bitwise operations, including two-address forms. The engine rejects unknown opcodes and methods with try/catch tables. It pre-decodes instruction widths, validates branch destinations against instruction boundaries, bounds code units and instruction steps, checks register accesses, and handles integer division edge cases without panicking.
 
@@ -125,7 +130,7 @@ The balanced preset should prefer on-demand runtime startup, avoid duplicate ser
 
 1. Portable config and profile validation, profile registry (done).
 2. DEX parsing and APK archive inspection with binary manifest parsing (done, unexecuted).
-3. DEX instruction decoding and a minimal interpreter (initial bounded integer-only interpreter implemented; full app execution remains future work).
+3. DEX instruction decoding and a minimal interpreter (bounded integer-only interpreter plus actual DEX method resolution/execution implemented; full app execution remains future work).
 4. Runtime adapter interface and backend capability report (contract plus initial Waydroid CLI adapter implemented; not live-validated).
 5. Verify an APK and pass launch requests through a ready runtime backend (preflight implemented; live APK execution not yet verified).
 6. Validate graphics acceleration, input, lifecycle and app isolation.

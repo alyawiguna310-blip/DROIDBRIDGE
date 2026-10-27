@@ -10,7 +10,7 @@
 //! use only instructions listed in IntegerDexEngine's implementation.
 //! Unsupported instructions are rejected before execution.
 
-use crate::dex::CodeItem;
+use crate::dex::{CodeItem, DexError, DexFile, MethodSignature};
 use std::error::Error;
 use std::fmt;
 
@@ -44,6 +44,268 @@ pub enum EngineReturn {
 pub struct ExecutionReport {
     pub return_value: EngineReturn,
     pub instruction_steps: u64,
+}
+
+/// Report for executing a method resolved from a parsed DEX file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MethodExecutionReport {
+    pub signature: MethodSignature,
+    pub execution: ExecutionReport,
+}
+
+/// Failure while finding and executing a method from real DEX metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MethodExecutionError {
+    Dex(DexError),
+    Engine(EngineError),
+    ClassNotFound {
+        class_descriptor: String,
+    },
+    MethodNotFound {
+        class_descriptor: String,
+        method_name: String,
+    },
+    MethodIsNotStatic {
+        class_descriptor: String,
+        method_name: String,
+    },
+    ArgumentCountMismatch {
+        class_descriptor: String,
+        method_name: String,
+        actual: usize,
+        expected: Vec<usize>,
+    },
+    UnsupportedSignature {
+        signature: String,
+    },
+    MethodHasNoCode {
+        signature: String,
+    },
+    AmbiguousMethod {
+        signature: String,
+    },
+}
+
+impl fmt::Display for MethodExecutionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Dex(error) => write!(f, "DEX metadata error: {error}"),
+            Self::Engine(error) => write!(f, "DEX execution error: {error}"),
+            Self::ClassNotFound { class_descriptor } => {
+                write!(
+                    f,
+                    "class {class_descriptor:?} was not found in this DEX file"
+                )
+            }
+            Self::MethodNotFound {
+                class_descriptor,
+                method_name,
+            } => write!(
+                f,
+                "method {class_descriptor}->{method_name} was not found in this DEX file"
+            ),
+            Self::MethodIsNotStatic {
+                class_descriptor,
+                method_name,
+            } => write!(
+                f,
+                "method {class_descriptor}->{method_name} is not static; instance methods are not supported"
+            ),
+            Self::ArgumentCountMismatch {
+                class_descriptor,
+                method_name,
+                actual,
+                expected,
+            } => write!(
+                f,
+                "method {class_descriptor}->{method_name} does not have a supported overload with {actual} arguments (available arities: {expected:?})"
+            ),
+            Self::UnsupportedSignature { signature } => write!(
+                f,
+                "method signature {signature} is unsupported; this engine accepts static int(int, ...) methods only"
+            ),
+            Self::MethodHasNoCode { signature } => {
+                write!(f, "method {signature} has no DEX code item")
+            }
+            Self::AmbiguousMethod { signature } => {
+                write!(f, "multiple methods match {signature}")
+            }
+        }
+    }
+}
+
+impl Error for MethodExecutionError {}
+
+impl From<DexError> for MethodExecutionError {
+    fn from(value: DexError) -> Self {
+        Self::Dex(value)
+    }
+}
+
+impl From<EngineError> for MethodExecutionError {
+    fn from(value: EngineError) -> Self {
+        Self::Engine(value)
+    }
+}
+
+/// List methods whose signature is supported by the current execution API.
+///
+/// This checks metadata only; it does not guarantee that every instruction
+/// inside the method is supported. Results follow the class/method order in
+/// the DEX file and can be filtered to one class descriptor.
+pub fn list_static_integer_methods(
+    dex: &DexFile<'_>,
+    class_filter: Option<&str>,
+) -> Result<Vec<MethodSignature>, MethodExecutionError> {
+    let mut found = Vec::new();
+    for class in dex.class_defs() {
+        let class_descriptor = dex.type_descriptor(class.class_idx)?;
+        if class_filter.is_some_and(|filter| filter != class_descriptor.as_str()) {
+            continue;
+        }
+        let Some(data) = dex.class_data(class)? else {
+            continue;
+        };
+        for method in data
+            .direct_methods
+            .iter()
+            .chain(data.virtual_methods.iter())
+        {
+            if method.access_flags & 0x8 == 0 || method.code_off == 0 {
+                continue;
+            }
+            let signature = dex.method_signature(method.method_idx)?;
+            if signature.return_type == "I" && signature.parameter_types.iter().all(|ty| ty == "I")
+            {
+                found.push(signature);
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// Resolve and execute a static integer method from a parsed DEX file.
+///
+/// Only methods returning a 32-bit integer and taking zero or more 32-bit
+/// integer arguments are accepted. Instance methods, object/reference
+/// parameters, wide values, method calls, and other Android runtime behavior
+/// are outside this engine's scope. The selected code item is passed to the
+/// bounded interpreter, which rejects unsupported instructions and try/catch
+/// tables.
+pub fn execute_static_integer_method(
+    dex: &DexFile<'_>,
+    class_descriptor: &str,
+    method_name: &str,
+    parameters: &[i32],
+) -> Result<MethodExecutionReport, MethodExecutionError> {
+    let mut selected_class = None;
+    for class in dex.class_defs() {
+        if dex.type_descriptor(class.class_idx)? == class_descriptor {
+            selected_class = Some(class);
+            break;
+        }
+    }
+    let class = selected_class.ok_or_else(|| MethodExecutionError::ClassNotFound {
+        class_descriptor: class_descriptor.to_owned(),
+    })?;
+    let Some(data) = dex.class_data(class)? else {
+        return Err(MethodExecutionError::MethodNotFound {
+            class_descriptor: class_descriptor.to_owned(),
+            method_name: method_name.to_owned(),
+        });
+    };
+
+    let mut same_name = Vec::new();
+    for method in data
+        .direct_methods
+        .iter()
+        .chain(data.virtual_methods.iter())
+    {
+        let signature = dex.method_signature(method.method_idx)?;
+        if signature.name == method_name {
+            same_name.push((*method, signature));
+        }
+    }
+    if same_name.is_empty() {
+        return Err(MethodExecutionError::MethodNotFound {
+            class_descriptor: class_descriptor.to_owned(),
+            method_name: method_name.to_owned(),
+        });
+    }
+
+    let static_methods: Vec<_> = same_name
+        .into_iter()
+        .filter(|(method, _)| method.access_flags & 0x8 != 0)
+        .collect();
+    if static_methods.is_empty() {
+        return Err(MethodExecutionError::MethodIsNotStatic {
+            class_descriptor: class_descriptor.to_owned(),
+            method_name: method_name.to_owned(),
+        });
+    }
+
+    let mut expected: Vec<usize> = static_methods
+        .iter()
+        .map(|(_, signature)| signature.parameter_types.len())
+        .collect();
+    expected.sort_unstable();
+    expected.dedup();
+
+    let matching_arity: Vec<_> = static_methods
+        .into_iter()
+        .filter(|(_, signature)| signature.parameter_types.len() == parameters.len())
+        .collect();
+    if matching_arity.is_empty() {
+        return Err(MethodExecutionError::ArgumentCountMismatch {
+            class_descriptor: class_descriptor.to_owned(),
+            method_name: method_name.to_owned(),
+            actual: parameters.len(),
+            expected,
+        });
+    }
+
+    let supported: Vec<_> = matching_arity
+        .into_iter()
+        .filter(|(_, signature)| {
+            signature.return_type == "I" && signature.parameter_types.iter().all(|ty| ty == "I")
+        })
+        .collect();
+    if supported.is_empty() {
+        let signature = same_name_signature_label(class_descriptor, method_name, parameters.len());
+        return Err(MethodExecutionError::UnsupportedSignature { signature });
+    }
+    if supported.len() > 1 {
+        return Err(MethodExecutionError::AmbiguousMethod {
+            signature: same_name_signature_label(class_descriptor, method_name, parameters.len()),
+        });
+    }
+
+    let (method, signature) = supported.into_iter().next().expect("one supported match");
+    if method.code_off == 0 {
+        return Err(MethodExecutionError::MethodHasNoCode {
+            signature: method_signature_label(&signature),
+        });
+    }
+    let code = dex.code_item(method.code_off)?;
+    let execution = IntegerDexEngine::default().execute(&code, parameters)?;
+    Ok(MethodExecutionReport {
+        signature,
+        execution,
+    })
+}
+
+fn same_name_signature_label(class_descriptor: &str, method_name: &str, arity: usize) -> String {
+    format!("{class_descriptor}->{method_name}/({arity} arguments)")
+}
+
+fn method_signature_label(signature: &MethodSignature) -> String {
+    format!(
+        "{}->{}({}){}",
+        signature.class_descriptor,
+        signature.name,
+        signature.parameter_types.join(","),
+        signature.return_type
+    )
 }
 
 /// A refusal or failure from the project-owned integer DEX engine.
@@ -528,6 +790,7 @@ fn arithmetic(opcode: u8, left: i32, right: i32, pc: usize) -> Result<i32, Engin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dex::testutil::{TEST_CLASS, TestMethod, build_dex};
 
     fn code(registers_size: u16, ins_size: u16, insns: &[u16]) -> CodeItem {
         CodeItem {
@@ -696,5 +959,91 @@ mod tests {
             run(&fallthrough, &[]),
             Err(EngineError::MissingReturn { pc: 1 })
         );
+    }
+    #[test]
+    fn resolves_and_executes_an_integer_method_from_real_dex_metadata() {
+        let bytes = build_dex(&[TestMethod {
+            name: "sum",
+            return_type: "I",
+            params: vec!["I", "I"],
+            registers: 3,
+            ins: 2,
+            outs: 0,
+            // add-int v0, v1, v2; return v0
+            insns: vec![0x0090, 0x0201, 0x000f],
+        }]);
+        let dex =
+            DexFile::parse(&bytes, &crate::dex::DexLimits::default()).expect("parse synthetic DEX");
+
+        let result = execute_static_integer_method(&dex, TEST_CLASS, "sum", &[19, 23])
+            .expect("execute method from DEX");
+
+        assert_eq!(result.signature.name, "sum");
+        assert_eq!(result.execution.return_value, EngineReturn::Int(42));
+        assert_eq!(result.execution.instruction_steps, 2);
+    }
+
+    #[test]
+    fn lists_only_static_integer_methods_with_code() {
+        let bytes = build_dex(&[TestMethod {
+            name: "answer",
+            return_type: "I",
+            params: vec![],
+            registers: 1,
+            ins: 0,
+            outs: 0,
+            insns: vec![0x0013, 42, 0x000f],
+        }]);
+        let dex =
+            DexFile::parse(&bytes, &crate::dex::DexLimits::default()).expect("parse synthetic DEX");
+
+        let methods =
+            list_static_integer_methods(&dex, Some(TEST_CLASS)).expect("list supported signatures");
+        assert_eq!(methods.len(), 1);
+        assert_eq!(methods[0].name, "answer");
+        assert_eq!(methods[0].return_type, "I");
+    }
+
+    #[test]
+    fn reports_wrong_argument_count_for_resolved_method() {
+        let bytes = build_dex(&[TestMethod {
+            name: "sum",
+            return_type: "I",
+            params: vec!["I", "I"],
+            registers: 3,
+            ins: 2,
+            outs: 0,
+            insns: vec![0x0090, 0x0201, 0x000f],
+        }]);
+        let dex =
+            DexFile::parse(&bytes, &crate::dex::DexLimits::default()).expect("parse synthetic DEX");
+
+        assert!(matches!(
+            execute_static_integer_method(&dex, TEST_CLASS, "sum", &[42]),
+            Err(MethodExecutionError::ArgumentCountMismatch {
+                actual: 1,
+                expected,
+                ..
+            }) if expected == vec![2]
+        ));
+    }
+
+    #[test]
+    fn refuses_to_execute_a_missing_method() {
+        let bytes = build_dex(&[TestMethod {
+            name: "answer",
+            return_type: "I",
+            params: vec![],
+            registers: 1,
+            ins: 0,
+            outs: 0,
+            insns: vec![0x0013, 42, 0x000f],
+        }]);
+        let dex =
+            DexFile::parse(&bytes, &crate::dex::DexLimits::default()).expect("parse synthetic DEX");
+        assert!(matches!(
+            execute_static_integer_method(&dex, TEST_CLASS, "missing", &[]),
+            Err(MethodExecutionError::MethodNotFound { .. })
+        ));
     }
 }

@@ -5,10 +5,12 @@
 //! environment. The launch command reports process observation, not app
 //! compatibility or graphics correctness.
 
-use droid_core::apk::{ApkLimits, ApkReport, inspect_file};
-use droid_core::dex::CodeItem;
+use droid_core::apk::{ApkLimits, ApkReport, inspect_file, read_dex_entry};
+use droid_core::dex::{CodeItem, DexFile, DexLimits};
 use droid_core::launcher::launch_verified_apk;
-use droid_core::runtime::engine::{EngineReturn, IntegerDexEngine};
+use droid_core::runtime::engine::{
+    EngineReturn, IntegerDexEngine, execute_static_integer_method, list_static_integer_methods,
+};
 use droid_core::runtime::{
     LaunchRequest, RuntimeBackend, RuntimeSession, RuntimeSessionState, waydroid::WaydroidBackend,
 };
@@ -37,6 +39,24 @@ fn run() -> Result<(), Box<dyn Error>> {
         CliCommand::Inspect { apk } => inspect_apk(&apk)?,
         CliCommand::Status => print_status(&WaydroidBackend::default())?,
         CliCommand::EngineDemo => run_engine_demo()?,
+        CliCommand::Methods {
+            apk,
+            dex_entry,
+            class_descriptor,
+        } => list_methods(&apk, &dex_entry, class_descriptor.as_deref())?,
+        CliCommand::RunMethod {
+            apk,
+            dex_entry,
+            class_descriptor,
+            method_name,
+            parameters,
+        } => run_method(
+            &apk,
+            &dex_entry,
+            &class_descriptor,
+            &method_name,
+            &parameters,
+        )?,
         CliCommand::Launch {
             apk,
             package,
@@ -54,6 +74,18 @@ enum CliCommand {
     },
     Status,
     EngineDemo,
+    Methods {
+        apk: PathBuf,
+        dex_entry: String,
+        class_descriptor: Option<String>,
+    },
+    RunMethod {
+        apk: PathBuf,
+        dex_entry: String,
+        class_descriptor: String,
+        method_name: String,
+        parameters: Vec<i32>,
+    },
     Launch {
         apk: PathBuf,
         package: String,
@@ -81,6 +113,34 @@ where
         }),
         "status" if arguments.len() == 1 => Ok(CliCommand::Status),
         "engine-demo" if arguments.len() == 1 => Ok(CliCommand::EngineDemo),
+        "methods" if (3..=4).contains(&arguments.len()) => Ok(CliCommand::Methods {
+            apk: PathBuf::from(&arguments[1]),
+            dex_entry: utf8_arg(&arguments, 2, "DEX entry")?,
+            class_descriptor: arguments
+                .get(3)
+                .map(|_| utf8_arg(&arguments, 3, "class descriptor"))
+                .transpose()?,
+        }),
+        "run-method" if arguments.len() >= 5 => {
+            let class_descriptor = utf8_arg(&arguments, 3, "class descriptor")?;
+            let method_name = utf8_arg(&arguments, 4, "method name")?;
+            let mut parameters = Vec::with_capacity(arguments.len().saturating_sub(5));
+            for value in arguments.iter().skip(5) {
+                let text = value
+                    .to_str()
+                    .ok_or_else(|| "integer arguments must be valid UTF-8".to_owned())?;
+                parameters.push(text.parse::<i32>().map_err(|_| {
+                    format!("invalid 32-bit integer argument {text:?}")
+                })?);
+            }
+            Ok(CliCommand::RunMethod {
+                apk: PathBuf::from(&arguments[1]),
+                dex_entry: utf8_arg(&arguments, 2, "DEX entry")?,
+                class_descriptor,
+                method_name,
+                parameters,
+            })
+        }
         "launch" if (3..=4).contains(&arguments.len()) => {
             let package = arguments[2]
                 .to_str()
@@ -106,6 +166,12 @@ where
         "inspect" => Err("usage: droidbridge inspect <apk-path>".to_owned()),
         "status" => Err("usage: droidbridge status".to_owned()),
         "engine-demo" => Err("usage: droidbridge engine-demo".to_owned()),
+        "methods" => Err(
+            "usage: droidbridge methods <apk-path> <dex-entry> [class-descriptor]".to_owned()
+        ),
+        "run-method" => Err(
+            "usage: droidbridge run-method <apk-path> <dex-entry> <class-descriptor> <method-name> [integer-argument ...]".to_owned()
+        ),
         "launch" => {
             Err("usage: droidbridge launch <apk-path> <package-name> [profile-id]".to_owned())
         }
@@ -122,17 +188,111 @@ fn print_usage() {
            droidbridge inspect <apk-path>\n\
            droidbridge status\n\
            droidbridge engine-demo\n\
+           droidbridge methods <apk-path> <dex-entry> [class-descriptor]\n\
+           droidbridge run-method <apk-path> <dex-entry> <class-descriptor> <method-name> [integer-argument ...]\n\
            droidbridge launch <apk-path> <package-name> [profile-id]\n\
            droidbridge help\n\n\
          Commands:\n\
            inspect      Parse APK metadata without installing or executing it.\n\
            status       Probe the existing Waydroid installation/session.\n\
            engine-demo  Run a synthetic integer method in our own DEX engine.\n\
+           methods      List static int(int, ...) method signature candidates.\n\
+           run-method   Execute a supported static integer method from actual DEX metadata.\n\
            launch       Verify the APK package and backend before delegating launch.\n\n\
-         The default launch profile id is {DEFAULT_PROFILE}. This does not apply\n\
-         device identity spoofing. Waydroid must already be installed, initialized,\n\
-         and running."
+         Method execution supports only a small DEX instruction subset; it does not run a whole APK."
     );
+}
+
+fn utf8_arg(arguments: &[OsString], index: usize, label: &str) -> Result<String, String> {
+    arguments
+        .get(index)
+        .and_then(|value| value.to_str())
+        .map(str::to_owned)
+        .ok_or_else(|| format!("{label} must be valid UTF-8"))
+}
+
+fn load_dex_from_apk<'a>(
+    apk: &std::path::Path,
+    dex_entry: &str,
+    limits: &ApkLimits,
+    bytes: &'a mut Vec<u8>,
+) -> Result<DexFile<'a>, Box<dyn Error>> {
+    let report = inspect_file(apk, limits)?;
+    if !report
+        .dex_files
+        .iter()
+        .any(|entry| entry.entry_name == dex_entry)
+    {
+        return Err(
+            io::Error::other(format!("DEX entry {dex_entry:?} was not found in the APK")).into(),
+        );
+    }
+    *bytes = read_dex_entry(apk, dex_entry, limits)?;
+    let dex_limits = DexLimits {
+        max_file_size: usize::try_from(limits.max_dex_size).unwrap_or(usize::MAX),
+    };
+    Ok(DexFile::parse(bytes.as_slice(), &dex_limits)?)
+}
+
+fn list_methods(
+    apk: &std::path::Path,
+    dex_entry: &str,
+    class_filter: Option<&str>,
+) -> Result<(), Box<dyn Error>> {
+    const MAX_METHODS_TO_PRINT: usize = 100;
+    let limits = ApkLimits::default();
+    let mut bytes = Vec::new();
+    let dex = load_dex_from_apk(apk, dex_entry, &limits, &mut bytes)?;
+    let methods = list_static_integer_methods(&dex, class_filter)?;
+    println!(
+        "static integer method candidates: {} (metadata signature only; instruction support is checked during execution)",
+        methods.len()
+    );
+    for signature in methods.iter().take(MAX_METHODS_TO_PRINT) {
+        println!(
+            "{}->{}({})I",
+            signature.class_descriptor,
+            signature.name,
+            signature.parameter_types.join(",")
+        );
+    }
+    if methods.len() > MAX_METHODS_TO_PRINT {
+        println!(
+            "output truncated to the first {MAX_METHODS_TO_PRINT} candidates; provide a class descriptor to narrow the list"
+        );
+    }
+    Ok(())
+}
+
+fn run_method(
+    apk: &std::path::Path,
+    dex_entry: &str,
+    class_descriptor: &str,
+    method_name: &str,
+    parameters: &[i32],
+) -> Result<(), Box<dyn Error>> {
+    let limits = ApkLimits::default();
+    let mut bytes = Vec::new();
+    let dex = load_dex_from_apk(apk, dex_entry, &limits, &mut bytes)?;
+    let report = execute_static_integer_method(&dex, class_descriptor, method_name, parameters)?;
+    println!(
+        "method: {}->{}({})I",
+        report.signature.class_descriptor,
+        report.signature.name,
+        report.signature.parameter_types.join(",")
+    );
+    println!("engine: DROIDBRIDGE IntegerDexEngine");
+    println!(
+        "instructions executed: {}",
+        report.execution.instruction_steps
+    );
+    match report.execution.return_value {
+        EngineReturn::Int(value) => println!("return: {value}"),
+        EngineReturn::Void => {
+            return Err(io::Error::other("integer method unexpectedly returned void").into());
+        }
+    }
+    Ok(())
 }
 
 fn run_engine_demo() -> Result<(), Box<dyn Error>> {
@@ -310,6 +470,59 @@ mod tests {
                 package: "com.example.game".to_owned(),
                 profile: "MY_DEVICE".to_owned(),
             })
+        );
+    }
+
+    #[test]
+    fn parses_methods_command_with_optional_class_filter() {
+        assert_eq!(
+            parse_command(args(&["methods", "app.apk", "classes.dex", "LTest;"])),
+            Ok(CliCommand::Methods {
+                apk: PathBuf::from("app.apk"),
+                dex_entry: "classes.dex".to_owned(),
+                class_descriptor: Some("LTest;".to_owned()),
+            })
+        );
+        assert_eq!(
+            parse_command(args(&["methods", "app.apk", "classes.dex"])),
+            Ok(CliCommand::Methods {
+                apk: PathBuf::from("app.apk"),
+                dex_entry: "classes.dex".to_owned(),
+                class_descriptor: None,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_run_method_integer_arguments() {
+        assert_eq!(
+            parse_command(args(&[
+                "run-method",
+                "app.apk",
+                "classes.dex",
+                "LTest;",
+                "sum",
+                "19",
+                "23"
+            ])),
+            Ok(CliCommand::RunMethod {
+                apk: PathBuf::from("app.apk"),
+                dex_entry: "classes.dex".to_owned(),
+                class_descriptor: "LTest;".to_owned(),
+                method_name: "sum".to_owned(),
+                parameters: vec![19, 23],
+            })
+        );
+        assert!(
+            parse_command(args(&[
+                "run-method",
+                "app.apk",
+                "classes.dex",
+                "LTest;",
+                "sum",
+                "not-an-int"
+            ]))
+            .is_err()
         );
     }
 

@@ -35,6 +35,8 @@ pub use profile::{DeviceProfile, MAX_PROFILE_ID_LEN, validate_profile_id};
 pub use registry::ProfileRegistry;
 pub use runtime::engine::{
     EngineError, EngineLimits, EngineReturn, ExecutionReport, IntegerDexEngine,
+    MethodExecutionError, MethodExecutionReport, execute_static_integer_method,
+    list_static_integer_methods,
 };
 pub use runtime::waydroid::WaydroidBackend;
 pub use runtime::{
