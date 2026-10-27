@@ -58,18 +58,32 @@ pub struct MethodExecutionReport {
 pub enum MethodExecutionError {
     Dex(DexError),
     Engine(EngineError),
-    ClassNotFound { class_descriptor: String },
-    MethodNotFound { class_descriptor: String, method_name: String },
-    MethodIsNotStatic { class_descriptor: String, method_name: String },
+    ClassNotFound {
+        class_descriptor: String,
+    },
+    MethodNotFound {
+        class_descriptor: String,
+        method_name: String,
+    },
+    MethodIsNotStatic {
+        class_descriptor: String,
+        method_name: String,
+    },
     ArgumentCountMismatch {
         class_descriptor: String,
         method_name: String,
         actual: usize,
         expected: Vec<usize>,
     },
-    UnsupportedSignature { signature: String },
-    MethodHasNoCode { signature: String },
-    AmbiguousMethod { signature: String },
+    UnsupportedSignature {
+        signature: String,
+    },
+    MethodHasNoCode {
+        signature: String,
+    },
+    AmbiguousMethod {
+        signature: String,
+    },
 }
 
 impl fmt::Display for MethodExecutionError {
@@ -78,17 +92,31 @@ impl fmt::Display for MethodExecutionError {
             Self::Dex(error) => write!(f, "DEX metadata error: {error}"),
             Self::Engine(error) => write!(f, "DEX execution error: {error}"),
             Self::ClassNotFound { class_descriptor } => {
-                write!(f, "class {class_descriptor:?} was not found in this DEX file")
+                write!(
+                    f,
+                    "class {class_descriptor:?} was not found in this DEX file"
+                )
             }
-            Self::MethodNotFound { class_descriptor, method_name } => write!(
+            Self::MethodNotFound {
+                class_descriptor,
+                method_name,
+            } => write!(
                 f,
                 "method {class_descriptor}->{method_name} was not found in this DEX file"
             ),
-            Self::MethodIsNotStatic { class_descriptor, method_name } => write!(
+            Self::MethodIsNotStatic {
+                class_descriptor,
+                method_name,
+            } => write!(
                 f,
                 "method {class_descriptor}->{method_name} is not static; instance methods are not supported"
             ),
-            Self::ArgumentCountMismatch { class_descriptor, method_name, actual, expected } => write!(
+            Self::ArgumentCountMismatch {
+                class_descriptor,
+                method_name,
+                actual,
+                expected,
+            } => write!(
                 f,
                 "method {class_descriptor}->{method_name} does not have a supported overload with {actual} arguments (available arities: {expected:?})"
             ),
@@ -138,14 +166,16 @@ pub fn list_static_integer_methods(
         let Some(data) = dex.class_data(class)? else {
             continue;
         };
-        for method in data.direct_methods.iter().chain(data.virtual_methods.iter()) {
+        for method in data
+            .direct_methods
+            .iter()
+            .chain(data.virtual_methods.iter())
+        {
             if method.access_flags & 0x8 == 0 || method.code_off == 0 {
                 continue;
             }
             let signature = dex.method_signature(method.method_idx)?;
-            if signature.return_type == "I"
-                && signature.parameter_types.iter().all(|ty| ty == "I")
-            {
+            if signature.return_type == "I" && signature.parameter_types.iter().all(|ty| ty == "I") {
                 found.push(signature);
             }
         }
@@ -935,12 +965,11 @@ mod tests {
             // add-int v0, v1, v2; return v0
             insns: vec![0x0090, 0x0201, 0x000f],
         }]);
-        let dex = DexFile::parse(&bytes, &crate::dex::DexLimits::default())
-            .expect("parse synthetic DEX");
+        let dex =
+            DexFile::parse(&bytes, &crate::dex::DexLimits::default()).expect("parse synthetic DEX");
 
-        let result =
-            execute_static_integer_method(&dex, TEST_CLASS, "sum", &[19, 23])
-                .expect("execute method from DEX");
+        let result = execute_static_integer_method(&dex, TEST_CLASS, "sum", &[19, 23])
+            .expect("execute method from DEX");
 
         assert_eq!(result.signature.name, "sum");
         assert_eq!(result.execution.return_value, EngineReturn::Int(42));
@@ -961,8 +990,8 @@ mod tests {
         let dex = DexFile::parse(&bytes, &crate::dex::DexLimits::default())
             .expect("parse synthetic DEX");
 
-        let methods = list_static_integer_methods(&dex, Some(TEST_CLASS))
-            .expect("list supported signatures");
+        let methods =
+            list_static_integer_methods(&dex, Some(TEST_CLASS)).expect("list supported signatures");
         assert_eq!(methods.len(), 1);
         assert_eq!(methods[0].name, "answer");
         assert_eq!(methods[0].return_type, "I");
