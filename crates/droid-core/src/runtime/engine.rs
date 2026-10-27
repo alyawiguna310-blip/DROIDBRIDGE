@@ -2144,8 +2144,7 @@ mod tests {
                 // if-eqz v0, +4; const/4 v0, 1; return v0;
                 // const/4 v0, 0; return v0
                 insns: vec![
-                    0x0071, 0x0000, 0x0000, 0x000c, 0x0038, 0x0004, 0x1012, 0x000f, 0x0012,
-                    0x000f,
+                    0x0071, 0x0000, 0x0000, 0x000c, 0x0038, 0x0004, 0x1012, 0x000f, 0x0012, 0x000f,
                 ],
             },
         ]);
