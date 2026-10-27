@@ -50,7 +50,13 @@ fn run() -> Result<(), Box<dyn Error>> {
             class_descriptor,
             method_name,
             parameters,
-        } => run_method(&apk, &dex_entry, &class_descriptor, &method_name, &parameters)?,
+        } => run_method(
+            &apk,
+            &dex_entry,
+            &class_descriptor,
+            &method_name,
+            &parameters,
+        )?,
         CliCommand::Launch {
             apk,
             package,
@@ -212,11 +218,14 @@ fn load_dex_from_apk<'a>(
     bytes: &'a mut Vec<u8>,
 ) -> Result<DexFile<'a>, Box<dyn Error>> {
     let report = inspect_file(apk, limits)?;
-    if !report.dex_files.iter().any(|entry| entry.entry_name == dex_entry) {
-        return Err(io::Error::other(format!(
-            "DEX entry {dex_entry:?} was not found in the APK"
-        ))
-        .into());
+    if !report
+        .dex_files
+        .iter()
+        .any(|entry| entry.entry_name == dex_entry)
+    {
+        return Err(
+            io::Error::other(format!("DEX entry {dex_entry:?} was not found in the APK")).into(),
+        );
     }
     *bytes = read_dex_entry(apk, dex_entry, limits)?;
     let dex_limits = DexLimits {
@@ -265,12 +274,7 @@ fn run_method(
     let limits = ApkLimits::default();
     let mut bytes = Vec::new();
     let dex = load_dex_from_apk(apk, dex_entry, &limits, &mut bytes)?;
-    let report = execute_static_integer_method(
-        &dex,
-        class_descriptor,
-        method_name,
-        parameters,
-    )?;
+    let report = execute_static_integer_method(&dex, class_descriptor, method_name, parameters)?;
     println!(
         "method: {}->{}({})I",
         report.signature.class_descriptor,
@@ -278,7 +282,10 @@ fn run_method(
         report.signature.parameter_types.join(",")
     );
     println!("engine: DROIDBRIDGE IntegerDexEngine");
-    println!("instructions executed: {}", report.execution.instruction_steps);
+    println!(
+        "instructions executed: {}",
+        report.execution.instruction_steps
+    );
     match report.execution.return_value {
         EngineReturn::Int(value) => println!("return: {value}"),
         EngineReturn::Void => {
@@ -490,7 +497,13 @@ mod tests {
     fn parses_run_method_integer_arguments() {
         assert_eq!(
             parse_command(args(&[
-                "run-method", "app.apk", "classes.dex", "LTest;", "sum", "19", "23"
+                "run-method",
+                "app.apk",
+                "classes.dex",
+                "LTest;",
+                "sum",
+                "19",
+                "23"
             ])),
             Ok(CliCommand::RunMethod {
                 apk: PathBuf::from("app.apk"),
@@ -500,10 +513,17 @@ mod tests {
                 parameters: vec![19, 23],
             })
         );
-        assert!(parse_command(args(&[
-            "run-method", "app.apk", "classes.dex", "LTest;", "sum", "not-an-int"
-        ]))
-        .is_err());
+        assert!(
+            parse_command(args(&[
+                "run-method",
+                "app.apk",
+                "classes.dex",
+                "LTest;",
+                "sum",
+                "not-an-int"
+            ]))
+            .is_err()
+        );
     }
 
     #[test]
