@@ -1771,6 +1771,7 @@ mod tests {
             let signature = MethodSignature {
                 class_descriptor: class_descriptor.to_owned(),
                 name: name.to_owned(),
+                shorty: "I".to_owned(),
                 parameter_types: Vec::new(),
                 return_type: "I".to_owned(),
             };
@@ -1784,6 +1785,7 @@ mod tests {
         let extension_signature = MethodSignature {
             class_descriptor: "Landroid/os/ext/SdkExtensions;".to_owned(),
             name: "getExtensionVersion".to_owned(),
+            shorty: "II".to_owned(),
             parameter_types: vec!["I".to_owned()],
             return_type: "I".to_owned(),
         };
@@ -1795,6 +1797,7 @@ mod tests {
         let wrong_arity = MethodSignature {
             class_descriptor: class_descriptor.to_owned(),
             name: "statusBars".to_owned(),
+            shorty: "II".to_owned(),
             parameter_types: vec!["I".to_owned()],
             return_type: "I".to_owned(),
         };
