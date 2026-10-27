@@ -354,14 +354,7 @@ fn execute_dex_method_index(
         .code_item(method.code_off)
         .map_err(|error| static_call_failed(method_idx, error))?;
     let mut resolver = |child_method_idx, arguments, budget: &mut ExecutionBudget| {
-        execute_dex_method_index(
-            dex,
-            child_method_idx,
-            arguments,
-            engine,
-            budget,
-            depth + 1,
-        )
+        execute_dex_method_index(dex, child_method_idx, arguments, engine, budget, depth + 1)
     };
     let report = engine.execute_with_budget(&code, parameters, budget, Some(&mut resolver))?;
 
@@ -415,10 +408,7 @@ fn find_encoded_method(
     ))
 }
 
-fn static_call_failed(
-    method_idx: u32,
-    error: impl fmt::Display,
-) -> EngineError {
+fn static_call_failed(method_idx: u32, error: impl fmt::Display) -> EngineError {
     EngineError::StaticCallFailed {
         method_idx,
         reason: error.to_string(),
@@ -566,10 +556,16 @@ impl fmt::Display for EngineError {
                 )
             }
             Self::MoveResultWithoutIntegerResult { pc } => {
-                write!(f, "move-result at code unit {pc} has no pending integer result")
+                write!(
+                    f,
+                    "move-result at code unit {pc} has no pending integer result"
+                )
             }
             Self::StaticCallFailed { method_idx, reason } => {
-                write!(f, "invoke-static method index {method_idx} failed: {reason}")
+                write!(
+                    f,
+                    "invoke-static method index {method_idx} failed: {reason}"
+                )
             }
             Self::MethodCallDepthLimitExceeded { max_depth } => {
                 write!(f, "DEX method call depth exceeded the limit of {max_depth}")
@@ -787,7 +783,8 @@ impl IntegerDexEngine {
                 }
                 0x71 | 0x77 => {
                     let method_idx = u32::from(code.insns[pc + 1]);
-                    let (count, first_register, argument_registers) = if instruction.opcode == 0x71 {
+                    let (count, first_register, argument_registers) = if instruction.opcode == 0x71
+                    {
                         let count = usize::from((word >> 8) & 0x0f);
                         if count > 5 {
                             return Err(EngineError::InvalidInstructionEncoding { pc, word });
@@ -815,15 +812,14 @@ impl IntegerDexEngine {
                         }
                     } else {
                         for offset in 0..count {
-                            arguments.push(read_register(
-                                &registers,
-                                first_register + offset,
-                                pc,
-                            )?);
+                            arguments.push(read_register(&registers, first_register + offset, pc)?);
                         }
                     }
                     let Some(call_resolver) = resolver.as_deref_mut() else {
-                        return Err(EngineError::UnsupportedOpcode { pc, opcode: instruction.opcode });
+                        return Err(EngineError::UnsupportedOpcode {
+                            pc,
+                            opcode: instruction.opcode,
+                        });
                     };
                     pending_result = Some(call_resolver(method_idx, &arguments, budget)?);
                 }
