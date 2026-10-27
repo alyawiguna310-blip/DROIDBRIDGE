@@ -8,7 +8,7 @@
 use droid_core::apk::{ApkLimits, ApkReport, inspect_file};
 use droid_core::launcher::launch_verified_apk;
 use droid_core::runtime::{
-    BackendStatus, LaunchRequest, RuntimeBackend, RuntimeSession, RuntimeSessionState,
+    LaunchRequest, RuntimeBackend, RuntimeSession, RuntimeSessionState,
     waydroid::WaydroidBackend,
 };
 use std::error::Error;
@@ -237,7 +237,7 @@ mod tests {
     use super::*;
 
     fn args(values: &[&str]) -> Vec<OsString> {
-        values.iter().map(OsString::from).collect()
+        values.iter().map(|value| OsString::from(*value)).collect()
     }
 
     #[test]
