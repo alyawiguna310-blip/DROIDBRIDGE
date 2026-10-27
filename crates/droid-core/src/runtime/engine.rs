@@ -1162,15 +1162,7 @@ mod tests {
             } else if opcode <= 0xdf {
                 // v0 = operation(v1, #5); return v0, with the lit8 in the high byte.
                 let literal_and_register = 0x0501;
-                code(
-                    2,
-                    1,
-                    &[
-                        u16::from(opcode),
-                        literal_and_register,
-                        0x000f,
-                    ],
-                )
+                code(2, 1, &[u16::from(opcode), literal_and_register, 0x000f])
             } else {
                 let literal_and_register = 0x0501;
                 code(2, 1, &[u16::from(opcode), literal_and_register, 0x000f])
