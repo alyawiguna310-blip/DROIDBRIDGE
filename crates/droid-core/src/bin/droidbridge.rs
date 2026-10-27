@@ -9,8 +9,7 @@ use droid_core::apk::{ApkLimits, ApkReport, inspect_file, read_dex_entry};
 use droid_core::dex::{CodeItem, DexFile, DexLimits};
 use droid_core::launcher::launch_verified_apk;
 use droid_core::runtime::engine::{
-    EngineReturn, IntegerDexEngine, execute_static_scalar_method_in_dex_set_at,
-    list_static_scalar_methods,
+    DexSetExecutor, EngineReturn, IntegerDexEngine, list_static_scalar_methods,
 };
 use droid_core::runtime::{
     LaunchRequest, RuntimeBackend, RuntimeSession, RuntimeSessionState, waydroid::WaydroidBackend,
@@ -354,6 +353,7 @@ fn probe_methods(
         .position(|name| name == dex_entry)
         .expect("requested DEX was validated and loaded");
     println!("loaded DEX bundle: {}", entry_names.join(", "));
+    let executor = DexSetExecutor::new(&dexes)?;
     let candidates = list_static_scalar_methods(&dexes[root_dex_index], class_filter)?;
     let attempts = candidates.len().min(MAX_PROBE_METHODS);
 
@@ -369,8 +369,7 @@ fn probe_methods(
     let mut refused = 0usize;
     for signature in candidates.iter().take(attempts) {
         let parameters = vec![0; signature.parameter_types.len()];
-        match execute_static_scalar_method_in_dex_set_at(
-            &dexes,
+        match executor.execute_static_scalar_method_at(
             root_dex_index,
             &signature.class_descriptor,
             &signature.name,
@@ -426,8 +425,8 @@ fn run_method(
         .position(|name| name == dex_entry)
         .expect("requested DEX was validated and loaded");
     println!("loaded DEX bundle: {}", entry_names.join(", "));
-    let report = execute_static_scalar_method_in_dex_set_at(
-        &dexes,
+    let executor = DexSetExecutor::new(&dexes)?;
+    let report = executor.execute_static_scalar_method_at(
         root_dex_index,
         class_descriptor,
         method_name,
