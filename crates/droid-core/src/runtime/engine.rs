@@ -41,11 +41,17 @@ pub enum EngineReturn {
     Int(i32),
     /// A null object reference returned by a DEX method.
     NullReference,
-    /// An opaque, bounded reference token; this is not a fully allocated Android object.
+    /// An opaque, bounded object reference; this is not a fully allocated Android object.
     ObjectReference {
         object_id: u32,
         dex_index: usize,
         type_idx: u32,
+    },
+    /// A symbolic reference to an interned DEX string; no ART object is allocated.
+    StringReference {
+        object_id: u32,
+        dex_index: usize,
+        string_idx: u32,
     },
 }
 
@@ -58,6 +64,11 @@ enum RegisterValue {
         dex_index: usize,
         type_idx: u32,
     },
+    StringReference {
+        object_id: u32,
+        dex_index: usize,
+        string_idx: u32,
+    },
 }
 
 impl RegisterValue {
@@ -66,6 +77,7 @@ impl RegisterValue {
             Self::Int(_) => "integer",
             Self::NullReference => "null reference",
             Self::ObjectReference { .. } => "object reference",
+            Self::StringReference { .. } => "string reference",
         }
     }
 }
@@ -480,6 +492,7 @@ impl<'dexes, 'data> DexSetExecutor<'dexes, 'data> {
             max_steps: engine.limits.max_instruction_steps,
             steps: 0,
             next_object_id: 0,
+            interned_strings: HashMap::new(),
         };
         let normalized_parameters: Vec<i32> = signature
             .parameter_types
@@ -517,7 +530,8 @@ impl<'dexes, 'data> DexSetExecutor<'dexes, 'data> {
             }
             EngineReturn::Void
             | EngineReturn::NullReference
-            | EngineReturn::ObjectReference { .. } => {
+            | EngineReturn::ObjectReference { .. }
+            | EngineReturn::StringReference { .. } => {
                 return Err(MethodExecutionError::ReturnTypeMismatch {
                     signature: method_signature_label(&signature),
                     expected: signature.return_type.clone(),
@@ -679,13 +693,18 @@ fn execute_dex_method_index(
             "V",
             EngineReturn::Int(_)
             | EngineReturn::NullReference
-            | EngineReturn::ObjectReference { .. },
+            | EngineReturn::ObjectReference { .. }
+            | EngineReturn::StringReference { .. },
         ) => Err(static_call_failed(
             method_idx,
             "method is declared void but executed a value return",
         )),
-        (ty, EngineReturn::ObjectReference { .. } | EngineReturn::NullReference)
-            if is_reference_type(ty) =>
+        (
+            ty,
+            EngineReturn::ObjectReference { .. }
+            | EngineReturn::StringReference { .. }
+            | EngineReturn::NullReference,
+        ) if is_reference_type(ty) =>
         {
             Ok(report.return_value)
         }
@@ -874,6 +893,11 @@ pub enum EngineError {
     MissingDexContext {
         pc: usize,
     },
+    StringResolutionFailed {
+        pc: usize,
+        string_idx: u32,
+        reason: String,
+    },
     InvalidObjectTypeIndex {
         pc: usize,
         type_idx: u32,
@@ -977,7 +1001,15 @@ impl fmt::Display for EngineError {
             ),
             Self::MissingDexContext { pc } => write!(
                 f,
-                "new-instance at code unit {pc} requires execution through a parsed DEX context"
+                "DEX instruction at code unit {pc} requires execution through a parsed DEX context"
+            ),
+            Self::StringResolutionFailed {
+                pc,
+                string_idx,
+                reason,
+            } => write!(
+                f,
+                "string-loading instruction at code unit {pc} cannot resolve DEX string index {string_idx}: {reason}"
             ),
             Self::InvalidObjectTypeIndex { pc, type_idx } => write!(
                 f,
@@ -993,7 +1025,7 @@ impl fmt::Display for EngineError {
             ),
             Self::ObjectIdLimitExceeded { pc } => write!(
                 f,
-                "symbolic object reference limit exceeded at code unit {pc}"
+                "symbolic object/string reference limit exceeded at code unit {pc}"
             ),
             Self::MoveResultWithoutObjectResult { pc } => write!(
                 f,
@@ -1088,6 +1120,7 @@ impl IntegerDexEngine {
             max_steps: self.limits.max_instruction_steps,
             steps: 0,
             next_object_id: 0,
+            interned_strings: HashMap::new(),
         };
         self.execute_with_budget(code, parameters, &mut budget, None, None)
     }
@@ -1206,6 +1239,15 @@ impl IntegerDexEngine {
                             dex_index,
                             type_idx,
                         },
+                        Some(EngineReturn::StringReference {
+                            object_id,
+                            dex_index,
+                            string_idx,
+                        }) => RegisterValue::StringReference {
+                            object_id,
+                            dex_index,
+                            string_idx,
+                        },
                         _ => return Err(EngineError::MoveResultWithoutObjectResult { pc }),
                     };
                     write_object_register(&mut registers, usize::from(word >> 8), value, pc)?;
@@ -1237,6 +1279,15 @@ impl IntegerDexEngine {
                             dex_index,
                             type_idx,
                         },
+                        RegisterValue::StringReference {
+                            object_id,
+                            dex_index,
+                            string_idx,
+                        } => EngineReturn::StringReference {
+                            object_id,
+                            dex_index,
+                            string_idx,
+                        },
                         RegisterValue::Int(_) => {
                             unreachable!("object read validates register type")
                         }
@@ -1245,6 +1296,51 @@ impl IntegerDexEngine {
                         return_value,
                         instruction_steps: budget.steps - start_steps,
                     });
+                }
+                0x1a | 0x1b => {
+                    // DEX strings are interned by value within this bounded execution.
+                    // This models reference identity for comparisons and returns without
+                    // allocating or emulating a Java String object in ART.
+                    let (dex_index, dex) =
+                        current_dex.ok_or(EngineError::MissingDexContext { pc })?;
+                    let string_idx = match instruction.opcode {
+                        0x1a => u32::from(code.insns[pc + 1]),
+                        0x1b => {
+                            u32::from(code.insns[pc + 1])
+                                | (u32::from(code.insns[pc + 2]) << 16)
+                        }
+                        _ => unreachable!("only string-constant opcodes are dispatched"),
+                    };
+                    let literal = dex.string(string_idx).map_err(|error| {
+                        EngineError::StringResolutionFailed {
+                            pc,
+                            string_idx,
+                            reason: error.to_string(),
+                        }
+                    })?;
+                    let object_id = if let Some(object_id) =
+                        budget.interned_strings.get(&literal).copied()
+                    {
+                        object_id
+                    } else {
+                        let object_id = budget
+                            .next_object_id
+                            .checked_add(1)
+                            .ok_or(EngineError::ObjectIdLimitExceeded { pc })?;
+                        budget.next_object_id = object_id;
+                        budget.interned_strings.insert(literal, object_id);
+                        object_id
+                    };
+                    write_object_register(
+                        &mut registers,
+                        usize::from(word >> 8),
+                        RegisterValue::StringReference {
+                            object_id,
+                            dex_index,
+                            string_idx,
+                        },
+                        pc,
+                    )?;
                 }
                 0x22 => {
                     // This is a symbolic reference token only. Constructors, fields, and
@@ -1492,6 +1588,8 @@ struct ExecutionBudget {
     max_steps: u64,
     steps: u64,
     next_object_id: u32,
+    /// Shared by nested calls so the same literal has stable identity across DEX files.
+    interned_strings: HashMap<String, u32>,
 }
 
 type StaticCallResolver<'a> =
@@ -1528,8 +1626,8 @@ fn decode_program(
             | 0x8d..=0x8f
             | 0xb0..=0xba => 1,
             0x0a | 0x0c if allow_static_calls => 1,
-            0x02 | 0x08 | 0x13 | 0x15 | 0x22 | 0x29 | 0x32..=0x3d | 0x90..=0x9a | 0xd0..=0xe2 => 2,
-            0x03 | 0x09 | 0x14 | 0x2a => 3,
+            0x02 | 0x08 | 0x13 | 0x15 | 0x1a | 0x22 | 0x29 | 0x32..=0x3d | 0x90..=0x9a | 0xd0..=0xe2 => 2,
+            0x03 | 0x09 | 0x14 | 0x1b | 0x2a => 3,
             0x71 | 0x77 if allow_static_calls => 3,
             _ => return Err(EngineError::UnsupportedOpcode { pc, opcode }),
         };
@@ -1649,7 +1747,9 @@ fn read_object_register(
             register_count: registers.len(),
         })?;
     match value {
-        RegisterValue::NullReference | RegisterValue::ObjectReference { .. } => Ok(value),
+        RegisterValue::NullReference
+        | RegisterValue::ObjectReference { .. }
+        | RegisterValue::StringReference { .. } => Ok(value),
         // DEX's verifier treats a zero constant used in a reference context as null.
         RegisterValue::Int(0) => Ok(RegisterValue::NullReference),
         RegisterValue::Int(_) => Err(EngineError::RegisterTypeMismatch {
@@ -1669,7 +1769,9 @@ fn write_object_register(
 ) -> Result<(), EngineError> {
     if !matches!(
         value,
-        RegisterValue::NullReference | RegisterValue::ObjectReference { .. }
+        RegisterValue::NullReference
+            | RegisterValue::ObjectReference { .. }
+            | RegisterValue::StringReference { .. }
     ) {
         return Err(EngineError::RegisterTypeMismatch {
             pc,
@@ -1717,7 +1819,9 @@ fn compare_zero(opcode: u8, value: i32) -> bool {
 fn is_reference_value(value: RegisterValue) -> bool {
     matches!(
         value,
-        RegisterValue::NullReference | RegisterValue::ObjectReference { .. }
+        RegisterValue::NullReference
+            | RegisterValue::ObjectReference { .. }
+            | RegisterValue::StringReference { .. }
     )
 }
 
@@ -1750,6 +1854,15 @@ fn compare_register_values(
                             object_id: left_id, ..
                         },
                         RegisterValue::ObjectReference {
+                            object_id: right_id,
+                            ..
+                        },
+                    ) => left_id == right_id,
+                    (
+                        RegisterValue::StringReference {
+                            object_id: left_id, ..
+                        },
+                        RegisterValue::StringReference {
                             object_id: right_id,
                             ..
                         },
@@ -1809,7 +1922,11 @@ fn compare_register_zero(
         RegisterValue::NullReference if opcode == 0x39 => Ok(false),
         RegisterValue::ObjectReference { .. } if opcode == 0x38 => Ok(false),
         RegisterValue::ObjectReference { .. } if opcode == 0x39 => Ok(true),
-        reference @ (RegisterValue::NullReference | RegisterValue::ObjectReference { .. }) => {
+        RegisterValue::StringReference { .. } if opcode == 0x38 => Ok(false),
+        RegisterValue::StringReference { .. } if opcode == 0x39 => Ok(true),
+        reference @ (RegisterValue::NullReference
+        | RegisterValue::ObjectReference { .. }
+        | RegisterValue::StringReference { .. }) => {
             Err(EngineError::RegisterTypeMismatch {
                 pc,
                 register,
@@ -1906,6 +2023,89 @@ mod tests {
             Ok(ExecutionReport {
                 return_value: EngineReturn::Int(42),
                 instruction_steps: 4,
+            })
+        );
+    }
+
+    #[test]
+    fn const_string_and_jumbo_string_preserve_interned_identity_across_static_returns() {
+        // The test DEX helper inserts "text" at string index 4 for this method order.
+        // The callee uses const-string/jumbo, while the caller uses const-string.
+        let bytes = build_dex(&[
+            TestMethod {
+                name: "text",
+                return_type: "Ljava/lang/String;",
+                params: vec![],
+                registers: 1,
+                ins: 0,
+                outs: 0,
+                insns: vec![0x001b, 4, 0, 0x0011],
+            },
+            TestMethod {
+                name: "answer",
+                return_type: "I",
+                params: vec![],
+                registers: 2,
+                ins: 0,
+                outs: 0,
+                // invoke-static {}, text; move-result-object v0;
+                // if-eqz v0, fail; const-string v1, "text";
+                // if-eq v0, v1, pass; return 0; return 1.
+                insns: vec![
+                    0x0071, 0, 0, 0x000c, 0x0038, 6, 0x011a, 4, 0x1032, 4, 0x0012, 0x000f,
+                    0x1012, 0x000f,
+                ],
+            },
+        ]);
+        let dex = DexFile::parse(&bytes, &crate::dex::DexLimits::default())
+            .expect("parse synthetic DEX");
+        assert_eq!(dex.string(4).expect("string pool index 4"), "text");
+
+        let report = execute_static_scalar_method(&dex, TEST_CLASS, "answer", &[])
+            .expect("execute string-reference method");
+        assert_eq!(report.execution.return_value, EngineReturn::Int(1));
+    }
+
+    #[test]
+    fn const_string_rejects_out_of_range_string_indices() {
+        let bytes = build_dex(&[TestMethod {
+            name: "answer",
+            return_type: "I",
+            params: vec![],
+            registers: 1,
+            ins: 0,
+            outs: 0,
+            insns: vec![0x001a, 0xffff],
+        }]);
+        let dex = DexFile::parse(&bytes, &crate::dex::DexLimits::default())
+            .expect("parse synthetic DEX");
+
+        assert!(matches!(
+            execute_static_scalar_method(&dex, TEST_CLASS, "answer", &[]),
+            Err(MethodExecutionError::Engine(EngineError::StringResolutionFailed {
+                pc: 0,
+                string_idx: 0xffff,
+                ..
+            }))
+        ));
+    }
+
+    #[test]
+    fn const_string_instruction_widths_are_checked_before_execution() {
+        assert_eq!(
+            run(&code(1, 0, &[0x001a]), &[]),
+            Err(EngineError::TruncatedInstruction {
+                pc: 0,
+                width: 2,
+                remaining: 1,
+            })
+        );
+        assert_eq!(
+            run(&code(1, 0, &[0x001b, 0]), &[]),
+            Err(EngineError::TruncatedInstruction {
+                pc: 0,
+                width: 3,
+                remaining: 2,
             })
         );
     }
@@ -2338,6 +2538,7 @@ mod tests {
             max_steps: 4,
             steps: 0,
             next_object_id: 0,
+            interned_strings: HashMap::new(),
         };
         let mut resolver = |method_idx, arguments: &[i32], budget: &mut ExecutionBudget| {
             assert_eq!(method_idx, 0);
