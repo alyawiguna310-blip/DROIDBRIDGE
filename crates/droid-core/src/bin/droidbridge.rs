@@ -8,8 +8,7 @@
 use droid_core::apk::{ApkLimits, ApkReport, inspect_file};
 use droid_core::launcher::launch_verified_apk;
 use droid_core::runtime::{
-    LaunchRequest, RuntimeBackend, RuntimeSession, RuntimeSessionState,
-    waydroid::WaydroidBackend,
+    LaunchRequest, RuntimeBackend, RuntimeSession, RuntimeSessionState, waydroid::WaydroidBackend,
 };
 use std::error::Error;
 use std::ffi::OsString;
