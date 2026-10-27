@@ -1,11 +1,12 @@
 //! A small, project-owned DEX integer execution engine.
 //!
 //! This is an early runtime component, not Android Runtime (ART) and not a
-//! complete Android application environment. It executes only a bounded subset
-//! of DEX instructions over 32-bit integer registers. Bounded static calls
-//! between scalar/void methods are supported across loaded DEX files, with
-//! bounded depth and a shared instruction budget. Objects, fields, arrays,
-//! exceptions, Android framework APIs, native libraries, and graphics are still unsupported.
+//! complete Android application environment. It executes a bounded subset of DEX
+//! instructions over 32-bit integer registers plus symbolic object/string references.
+//! Bounded static calls between scalar/void methods are supported across loaded DEX
+//! files, with bounded depth and a shared instruction budget. Object behavior, fields,
+//! arrays, exceptions, Android framework APIs, native libraries, and graphics remain
+//! unsupported.
 //!
 //! The input is a parsed CodeItem. It must have no try/catch table and must
 //! use only instructions listed in IntegerDexEngine's implementation.
