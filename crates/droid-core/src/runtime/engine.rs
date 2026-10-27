@@ -39,6 +39,35 @@ impl Default for EngineLimits {
 pub enum EngineReturn {
     Void,
     Int(i32),
+    /// A null object reference returned by a DEX method.
+    NullReference,
+    /// An opaque, bounded reference token; this is not a fully allocated Android object.
+    ObjectReference {
+        object_id: u32,
+        dex_index: usize,
+        type_idx: u32,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RegisterValue {
+    Int(i32),
+    NullReference,
+    ObjectReference {
+        object_id: u32,
+        dex_index: usize,
+        type_idx: u32,
+    },
+}
+
+impl RegisterValue {
+    fn kind_name(self) -> &'static str {
+        match self {
+            Self::Int(_) => "integer",
+            Self::NullReference => "null reference",
+            Self::ObjectReference { .. } => "object reference",
+        }
+    }
 }
 
 /// Outcome from one bounded method execution.
@@ -164,6 +193,11 @@ impl From<EngineError> for MethodExecutionError {
 /// DEX scalar values represented in a single 32-bit register by this engine.
 fn is_int_like_type(ty: &str) -> bool {
     matches!(ty, "I" | "Z" | "B" | "S" | "C")
+}
+
+/// Object and array descriptors are reference types in DEX signatures.
+fn is_reference_type(ty: &str) -> bool {
+    (ty.starts_with('L') && ty.ends_with(';')) || ty.starts_with('[')
 }
 
 /// Normalize a DEX scalar result or argument to its declared type width.
@@ -445,6 +479,7 @@ impl<'dexes, 'data> DexSetExecutor<'dexes, 'data> {
         let mut budget = ExecutionBudget {
             max_steps: engine.limits.max_instruction_steps,
             steps: 0,
+            next_object_id: 0,
         };
         let normalized_parameters: Vec<i32> = signature
             .parameter_types
@@ -462,6 +497,7 @@ impl<'dexes, 'data> DexSetExecutor<'dexes, 'data> {
                 &code,
                 &normalized_parameters,
                 &mut budget,
+                Some((dex_index, &dexes[dex_index])),
                 Some(&mut resolver),
             )
             .map_err(|error| match error {
@@ -479,7 +515,9 @@ impl<'dexes, 'data> DexSetExecutor<'dexes, 'data> {
                 execution.return_value =
                     EngineReturn::Int(normalize_int_like(&signature.return_type, value));
             }
-            EngineReturn::Void => {
+            EngineReturn::Void
+            | EngineReturn::NullReference
+            | EngineReturn::ObjectReference { .. } => {
                 return Err(MethodExecutionError::ReturnTypeMismatch {
                     signature: method_signature_label(&signature),
                     expected: signature.return_type.clone(),
@@ -568,10 +606,13 @@ fn execute_dex_method_index(
             "only int, boolean, byte, short, and char parameters are supported",
         ));
     }
-    if signature.return_type != "V" && !is_int_like_type(&signature.return_type) {
+    if signature.return_type != "V"
+        && !is_int_like_type(&signature.return_type)
+        && !is_reference_type(&signature.return_type)
+    {
         return Err(static_call_failed(
             method_idx,
-            "only int, boolean, byte, short, char, and void returns are supported",
+            "only int-like, reference, and void returns are supported",
         ));
     }
     if parameters.len() != signature.parameter_types.len() {
@@ -607,7 +648,13 @@ fn execute_dex_method_index(
     };
     let report = context
         .engine
-        .execute_with_budget(&code, &normalized_parameters, budget, Some(&mut resolver))
+        .execute_with_budget(
+            &code,
+            &normalized_parameters,
+            budget,
+            Some((dex_index, &context.dexes[dex_index])),
+            Some(&mut resolver),
+        )
         .map_err(|error| match error {
             EngineError::StaticCallFailed { method_idx, reason } => static_call_failed(
                 method_idx,
@@ -628,11 +675,23 @@ fn execute_dex_method_index(
             method_idx,
             "method has scalar return type but executed return-void",
         )),
-        ("V", EngineReturn::Int(_)) => Err(static_call_failed(
+        ("V", EngineReturn::Int(_) | EngineReturn::NullReference | EngineReturn::ObjectReference { .. }) => Err(static_call_failed(
             method_idx,
-            "method is declared void but executed an integer return",
+            "method is declared void but executed a value return",
         )),
-        _ => unreachable!("only scalar and void signatures passed validation"),
+        (ty, EngineReturn::ObjectReference { .. } | EngineReturn::NullReference)
+            if is_reference_type(ty) =>
+        {
+            Ok(report.return_value)
+        }
+        _ => Err(static_call_failed(
+            method_idx,
+            format!(
+                "method {} returned a value incompatible with its declared return type {}",
+                method_signature_label(&signature),
+                signature.return_type
+            ),
+        )),
     }
 }
 
@@ -801,6 +860,30 @@ pub enum EngineError {
         register: usize,
         register_count: usize,
     },
+    RegisterTypeMismatch {
+        pc: usize,
+        register: usize,
+        expected: &'static str,
+        actual: &'static str,
+    },
+    MissingDexContext {
+        pc: usize,
+    },
+    InvalidObjectTypeIndex {
+        pc: usize,
+        type_idx: u32,
+    },
+    InvalidObjectTypeDescriptor {
+        pc: usize,
+        type_idx: u32,
+        descriptor: String,
+    },
+    ObjectIdLimitExceeded {
+        pc: usize,
+    },
+    MoveResultWithoutObjectResult {
+        pc: usize,
+    },
     InvalidBranchTarget {
         pc: usize,
         target: i64,
@@ -878,6 +961,39 @@ impl fmt::Display for EngineError {
                 f,
                 "DEX instruction at code unit {pc} accesses register v{register}, but only {register_count} registers exist"
             ),
+            Self::RegisterTypeMismatch {
+                pc,
+                register,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "DEX instruction at code unit {pc} expects {expected} in v{register}, found {actual}"
+            ),
+            Self::MissingDexContext { pc } => write!(
+                f,
+                "new-instance at code unit {pc} requires execution through a parsed DEX context"
+            ),
+            Self::InvalidObjectTypeIndex { pc, type_idx } => write!(
+                f,
+                "new-instance at code unit {pc} references invalid DEX type index {type_idx}"
+            ),
+            Self::InvalidObjectTypeDescriptor {
+                pc,
+                type_idx,
+                descriptor,
+            } => write!(
+                f,
+                "new-instance at code unit {pc} references non-class type {descriptor:?} at index {type_idx}"
+            ),
+            Self::ObjectIdLimitExceeded { pc } => write!(
+                f,
+                "symbolic object reference limit exceeded at code unit {pc}"
+            ),
+            Self::MoveResultWithoutObjectResult { pc } => write!(
+                f,
+                "move-result-object at code unit {pc} has no pending object-reference result"
+            ),
             Self::InvalidBranchTarget { pc, target } => write!(
                 f,
                 "DEX branch at code unit {pc} targets invalid code unit {target}"
@@ -927,9 +1043,9 @@ impl Error for EngineError {}
 /// Project-owned, bounded interpreter for a small integer-only DEX subset.
 ///
 /// Supported instructions:
-/// - nop, move, move/from16, move/16;
+/// - nop, integer moves, object moves, and move-result-object;
 /// - const/4, const/16, const, const/high16;
-/// - return-void, return;
+/// - new-instance symbolic reference tokens; return-void, return, return-object;
 /// - goto, goto/16, goto/32;
 /// - if-eq, if-ne, if-lt, if-ge, if-gt, if-le and their *z forms;
 /// - 32-bit integer arithmetic/bitwise operations, /2addr and literal forms;
@@ -966,8 +1082,9 @@ impl IntegerDexEngine {
         let mut budget = ExecutionBudget {
             max_steps: self.limits.max_instruction_steps,
             steps: 0,
+            next_object_id: 0,
         };
-        self.execute_with_budget(code, parameters, &mut budget, None)
+        self.execute_with_budget(code, parameters, &mut budget, None, None)
     }
 
     fn execute_with_budget(
@@ -975,6 +1092,7 @@ impl IntegerDexEngine {
         code: &CodeItem,
         parameters: &[i32],
         budget: &mut ExecutionBudget,
+        current_dex: Option<(usize, &DexFile<'_>)>,
         mut resolver: Option<&mut StaticCallResolver<'_>>,
     ) -> Result<ExecutionReport, EngineError> {
         if code.insns.len() > self.limits.max_code_units {
@@ -1001,9 +1119,14 @@ impl IntegerDexEngine {
         }
 
         let program = decode_program(&code.insns, resolver.is_some())?;
-        let mut registers = vec![0_i32; usize::from(code.registers_size)];
+        let mut registers = vec![RegisterValue::Int(0); usize::from(code.registers_size)];
         let parameter_start = registers.len() - expected_parameters;
-        registers[parameter_start..].copy_from_slice(parameters);
+        for (slot, value) in registers[parameter_start..]
+            .iter_mut()
+            .zip(parameters.iter().copied())
+        {
+            *slot = RegisterValue::Int(value);
+        }
 
         let start_steps = budget.steps;
         let mut pc = 0usize;
@@ -1019,7 +1142,7 @@ impl IntegerDexEngine {
             let instruction = program[pc].ok_or(EngineError::MissingReturn { pc })?;
             let word = code.insns[pc];
             let mut next_pc = pc + instruction.width;
-            let current_result = if instruction.opcode == 0x0a {
+            let current_result = if matches!(instruction.opcode, 0x0a | 0x0c) {
                 pending_result.take()
             } else {
                 pending_result = None;
@@ -1046,12 +1169,44 @@ impl IntegerDexEngine {
                     let value = read_register(&registers, src, pc)?;
                     write_register(&mut registers, dest, value, pc)?;
                 }
+                0x07 | 0x08 | 0x09 => {
+                    let (dest, src) = match instruction.opcode {
+                        0x07 => (
+                            usize::from((word >> 8) & 0x0f),
+                            usize::from(word >> 12),
+                        ),
+                        0x08 => (usize::from(word >> 8), usize::from(code.insns[pc + 1])),
+                        0x09 => (
+                            usize::from(code.insns[pc + 1]),
+                            usize::from(code.insns[pc + 2]),
+                        ),
+                        _ => unreachable!("only object move opcodes are dispatched"),
+                    };
+                    let value = read_object_register(&registers, src, pc)?;
+                    write_object_register(&mut registers, dest, value, pc)?;
+                }
                 0x0a => {
                     let value = match current_result {
                         Some(EngineReturn::Int(value)) => value,
                         _ => return Err(EngineError::MoveResultWithoutIntegerResult { pc }),
                     };
                     write_register(&mut registers, usize::from(word >> 8), value, pc)?;
+                }
+                0x0c => {
+                    let value = match current_result {
+                        Some(EngineReturn::NullReference) => RegisterValue::NullReference,
+                        Some(EngineReturn::ObjectReference {
+                            object_id,
+                            dex_index,
+                            type_idx,
+                        }) => RegisterValue::ObjectReference {
+                            object_id,
+                            dex_index,
+                            type_idx,
+                        },
+                        _ => return Err(EngineError::MoveResultWithoutObjectResult { pc }),
+                    };
+                    write_object_register(&mut registers, usize::from(word >> 8), value, pc)?;
                 }
                 0x0e => {
                     return Ok(ExecutionReport {
@@ -1065,6 +1220,59 @@ impl IntegerDexEngine {
                         return_value: EngineReturn::Int(read_register(&registers, src, pc)?),
                         instruction_steps: budget.steps - start_steps,
                     });
+                }
+                0x11 => {
+                    let src = usize::from(word >> 8);
+                    let value = read_object_register(&registers, src, pc)?;
+                    let return_value = match value {
+                        RegisterValue::NullReference => EngineReturn::NullReference,
+                        RegisterValue::ObjectReference {
+                            object_id,
+                            dex_index,
+                            type_idx,
+                        } => EngineReturn::ObjectReference {
+                            object_id,
+                            dex_index,
+                            type_idx,
+                        },
+                        RegisterValue::Int(_) => unreachable!("object read validates register type"),
+                    };
+                    return Ok(ExecutionReport {
+                        return_value,
+                        instruction_steps: budget.steps - start_steps,
+                    });
+                }
+                0x22 => {
+                    // This is a symbolic reference token only. Constructors, fields, and
+                    // object behavior are deliberately not emulated by this instruction.
+                    let (dex_index, dex) =
+                        current_dex.ok_or(EngineError::MissingDexContext { pc })?;
+                    let type_idx = u32::from(code.insns[pc + 1]);
+                    let descriptor = dex.type_descriptor(type_idx).map_err(|_| {
+                        EngineError::InvalidObjectTypeIndex { pc, type_idx }
+                    })?;
+                    if !(descriptor.starts_with('L') && descriptor.ends_with(';')) {
+                        return Err(EngineError::InvalidObjectTypeDescriptor {
+                            pc,
+                            type_idx,
+                            descriptor,
+                        });
+                    }
+                    let object_id = budget
+                        .next_object_id
+                        .checked_add(1)
+                        .ok_or(EngineError::ObjectIdLimitExceeded { pc })?;
+                    budget.next_object_id = object_id;
+                    write_object_register(
+                        &mut registers,
+                        usize::from(word >> 8),
+                        RegisterValue::ObjectReference {
+                            object_id,
+                            dex_index,
+                            type_idx,
+                        },
+                        pc,
+                    )?;
                 }
                 0x12 => {
                     let dest = usize::from((word >> 8) & 0x0f);
@@ -1248,6 +1456,7 @@ const MAX_METHOD_CALL_DEPTH: usize = 32;
 struct ExecutionBudget {
     max_steps: u64,
     steps: u64,
+    next_object_id: u32,
 }
 
 type StaticCallResolver<'a> =
@@ -1273,10 +1482,12 @@ fn decode_program(
         let width = match opcode {
             0x00 if word == 0 => 1,
             0x00 => return Err(EngineError::UnsupportedOpcode { pc, opcode }),
-            0x01 | 0x0e | 0x0f | 0x12 | 0x28 | 0x7b..=0x7c | 0x8d..=0x8f | 0xb0..=0xba => 1,
-            0x0a if allow_static_calls => 1,
-            0x02 | 0x13 | 0x15 | 0x29 | 0x32..=0x3d | 0x90..=0x9a | 0xd0..=0xe2 => 2,
-            0x03 | 0x14 | 0x2a => 3,
+            0x01 | 0x07 | 0x0e | 0x0f | 0x11 | 0x12 | 0x28 | 0x7b..=0x7c
+            | 0x8d..=0x8f | 0xb0..=0xba => 1,
+            0x0a | 0x0c if allow_static_calls => 1,
+            0x02 | 0x08 | 0x13 | 0x15 | 0x22 | 0x29 | 0x32..=0x3d | 0x90..=0x9a
+            | 0xd0..=0xe2 => 2,
+            0x03 | 0x09 | 0x14 | 0x2a => 3,
             0x71 | 0x77 if allow_static_calls => 3,
             _ => return Err(EngineError::UnsupportedOpcode { pc, opcode }),
         };
@@ -1340,23 +1551,91 @@ fn decode_program(
     Ok(program)
 }
 
-fn read_register(registers: &[i32], register: usize, pc: usize) -> Result<i32, EngineError> {
-    registers
+fn read_register(
+    registers: &[RegisterValue],
+    register: usize,
+    pc: usize,
+) -> Result<i32, EngineError> {
+    let value = registers
         .get(register)
         .copied()
         .ok_or(EngineError::InvalidRegister {
             pc,
             register,
             register_count: registers.len(),
-        })
+        })?;
+    match value {
+        RegisterValue::Int(value) => Ok(value),
+        other => Err(EngineError::RegisterTypeMismatch {
+            pc,
+            register,
+            expected: "integer",
+            actual: other.kind_name(),
+        }),
+    }
 }
 
 fn write_register(
-    registers: &mut [i32],
+    registers: &mut [RegisterValue],
     register: usize,
     value: i32,
     pc: usize,
 ) -> Result<(), EngineError> {
+    let count = registers.len();
+    let slot = registers
+        .get_mut(register)
+        .ok_or(EngineError::InvalidRegister {
+            pc,
+            register,
+            register_count: count,
+        })?;
+    *slot = RegisterValue::Int(value);
+    Ok(())
+}
+
+fn read_object_register(
+    registers: &[RegisterValue],
+    register: usize,
+    pc: usize,
+) -> Result<RegisterValue, EngineError> {
+    let value = registers
+        .get(register)
+        .copied()
+        .ok_or(EngineError::InvalidRegister {
+            pc,
+            register,
+            register_count: registers.len(),
+        })?;
+    match value {
+        RegisterValue::NullReference | RegisterValue::ObjectReference { .. } => Ok(value),
+        // DEX's verifier treats a zero constant used in a reference context as null.
+        RegisterValue::Int(0) => Ok(RegisterValue::NullReference),
+        RegisterValue::Int(_) => Err(EngineError::RegisterTypeMismatch {
+            pc,
+            register,
+            expected: "object reference or null",
+            actual: "integer",
+        }),
+    }
+}
+
+fn write_object_register(
+    registers: &mut [RegisterValue],
+    register: usize,
+    value: RegisterValue,
+    pc: usize,
+) -> Result<(), EngineError> {
+    if !matches!(
+        value,
+        RegisterValue::NullReference | RegisterValue::ObjectReference { .. }
+    ) {
+        return Err(EngineError::RegisterTypeMismatch {
+            pc,
+            register,
+            expected: "object reference or null",
+            actual: value.kind_name(),
+        });
+    }
     let count = registers.len();
     let slot = registers
         .get_mut(register)
@@ -1910,11 +2189,12 @@ mod tests {
         let mut budget = ExecutionBudget {
             max_steps: 4,
             steps: 0,
+            next_object_id: 0,
         };
         let mut resolver = |method_idx, arguments: &[i32], budget: &mut ExecutionBudget| {
             assert_eq!(method_idx, 0);
             engine
-                .execute_with_budget(&callee, arguments, budget, None)
+                .execute_with_budget(&callee, arguments, budget, None, None)
                 .map(|report| report.return_value)
         };
 
@@ -2162,6 +2442,71 @@ mod tests {
                 .return_value,
             EngineReturn::Int(-1)
         );
+    }
+
+    #[test]
+    fn supports_bounded_object_reference_creation_and_move_result_object() {
+        let bytes = build_dex(&[
+            TestMethod {
+                name: "factory",
+                return_type: TEST_CLASS,
+                params: vec![],
+                registers: 1,
+                ins: 0,
+                outs: 0,
+                // new-instance v0, type@0 (LTest;); return-object v0
+                insns: vec![0x0022, 0x0000, 0x0011],
+            },
+            TestMethod {
+                name: "caller",
+                return_type: "I",
+                params: vec![],
+                registers: 2,
+                ins: 0,
+                outs: 0,
+                // invoke-static {}, method@0; move-result-object v0;
+                // const/16 v1, 42; return v1
+                insns: vec![0x0071, 0x0000, 0x0000, 0x000c, 0x0113, 42, 0x010f],
+            },
+        ]);
+        let dex = DexFile::parse(&bytes, &crate::dex::DexLimits::default())
+            .expect("parse synthetic DEX");
+
+        let report = execute_static_scalar_method(&dex, TEST_CLASS, "caller", &[])
+            .expect("execute object-returning static call");
+        assert_eq!(report.execution.return_value, EngineReturn::Int(42));
+        assert_eq!(report.execution.instruction_steps, 5);
+    }
+
+    #[test]
+    fn supports_null_object_return_through_move_result_object() {
+        let bytes = build_dex(&[
+            TestMethod {
+                name: "factory",
+                return_type: "Ljava/lang/Object;",
+                params: vec![],
+                registers: 1,
+                ins: 0,
+                outs: 0,
+                // const/4 v0, 0 (null); return-object v0
+                insns: vec![0x0012, 0x0011],
+            },
+            TestMethod {
+                name: "caller",
+                return_type: "I",
+                params: vec![],
+                registers: 2,
+                ins: 0,
+                outs: 0,
+                insns: vec![0x0071, 0x0000, 0x0000, 0x000c, 0x0113, 42, 0x010f],
+            },
+        ]);
+        let dex = DexFile::parse(&bytes, &crate::dex::DexLimits::default())
+            .expect("parse synthetic DEX");
+
+        let report = execute_static_scalar_method(&dex, TEST_CLASS, "caller", &[])
+            .expect("execute null-returning static call");
+        assert_eq!(report.execution.return_value, EngineReturn::Int(42));
     }
 
     #[test]
