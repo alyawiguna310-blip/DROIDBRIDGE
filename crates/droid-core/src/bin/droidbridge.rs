@@ -9,7 +9,7 @@ use droid_core::apk::{ApkLimits, ApkReport, inspect_file, read_dex_entry};
 use droid_core::dex::{CodeItem, DexFile, DexLimits};
 use droid_core::launcher::launch_verified_apk;
 use droid_core::runtime::engine::{
-    EngineReturn, IntegerDexEngine, execute_static_integer_method, list_static_integer_methods,
+    EngineReturn, IntegerDexEngine, execute_static_scalar_method, list_static_scalar_methods,
 };
 use droid_core::runtime::{
     LaunchRequest, RuntimeBackend, RuntimeSession, RuntimeSessionState, waydroid::WaydroidBackend,
@@ -266,7 +266,7 @@ fn list_methods(
     let limits = ApkLimits::default();
     let mut bytes = Vec::new();
     let dex = load_dex_from_apk(apk, dex_entry, &limits, &mut bytes)?;
-    let methods = list_static_integer_methods(&dex, class_filter)?;
+    let methods = list_static_scalar_methods(&dex, class_filter)?;
     println!(
         "static scalar method candidates: {} (metadata signature only; instruction support is checked during execution)",
         methods.len()
@@ -312,7 +312,7 @@ fn probe_methods(
     let mut refused = 0usize;
     for signature in candidates.iter().take(attempts) {
         let parameters = vec![0; signature.parameter_types.len()];
-        match execute_static_integer_method(
+        match execute_static_scalar_method(
             &dex,
             &signature.class_descriptor,
             &signature.name,
