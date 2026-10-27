@@ -370,8 +370,9 @@ fn probe_methods(
     let mut refused = 0usize;
     for signature in candidates.iter().take(attempts) {
         let parameters = vec![0; signature.parameter_types.len()];
-        match execute_static_scalar_method_in_dex_set(
+        match execute_static_scalar_method_in_dex_set_at(
             &dexes,
+            root_dex_index,
             &signature.class_descriptor,
             &signature.name,
             &parameters,
@@ -427,8 +428,13 @@ fn run_method(
         &mut buffers,
         &mut entry_names,
     )?;
-    let report = execute_static_scalar_method_in_dex_set(
+    let root_dex_index = entry_names
+        .iter()
+        .position(|name| name == dex_entry)
+        .expect("requested DEX was validated and loaded");
+    let report = execute_static_scalar_method_in_dex_set_at(
         &dexes,
+        root_dex_index,
         class_descriptor,
         method_name,
         parameters,
