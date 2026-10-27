@@ -1166,7 +1166,7 @@ mod tests {
                     2,
                     1,
                     &[
-                        (u16::from(opcode) & 0x00ff) | 0x0000,
+                        u16::from(opcode),
                         literal_and_register,
                         0x000f,
                     ],
