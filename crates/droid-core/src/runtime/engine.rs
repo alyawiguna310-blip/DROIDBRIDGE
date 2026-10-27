@@ -483,6 +483,11 @@ pub enum EngineError {
     MoveResultWithoutIntegerResult {
         pc: usize,
     },
+    OutgoingArgumentCountExceeded {
+        pc: usize,
+        count: usize,
+        outs_size: u16,
+    },
     StaticCallFailed {
         method_idx: u32,
         reason: String,
@@ -561,6 +566,14 @@ impl fmt::Display for EngineError {
                     "move-result at code unit {pc} has no pending integer result"
                 )
             }
+            Self::OutgoingArgumentCountExceeded {
+                pc,
+                count,
+                outs_size,
+            } => write!(
+                f,
+                "invoke-static at code unit {pc} uses {count} argument words but the method declares outs_size={outs_size}"
+            ),
             Self::StaticCallFailed { method_idx, reason } => {
                 write!(
                     f,
@@ -839,6 +852,13 @@ impl IntegerDexEngine {
                             Vec::new(),
                         )
                     };
+                    if count > usize::from(code.outs_size) {
+                        return Err(EngineError::OutgoingArgumentCountExceeded {
+                            pc,
+                            count,
+                            outs_size: code.outs_size,
+                        });
+                    }
                     let mut arguments = Vec::with_capacity(count);
                     if instruction.opcode == 0x71 {
                         for register in argument_registers.into_iter().take(count) {
@@ -1371,6 +1391,72 @@ mod tests {
 
         assert_eq!(result.execution.return_value, EngineReturn::Int(42));
         assert_eq!(result.execution.instruction_steps, 5);
+    }
+
+    #[test]
+    fn executes_static_call_range_encoding() {
+        let bytes = build_dex(&[
+            TestMethod {
+                name: "sum",
+                return_type: "I",
+                params: vec!["I", "I"],
+                registers: 3,
+                ins: 2,
+                outs: 0,
+                insns: vec![0x0090, 0x0201, 0x000f],
+            },
+            TestMethod {
+                name: "callerRange",
+                return_type: "I",
+                params: vec!["I", "I"],
+                registers: 3,
+                ins: 2,
+                outs: 2,
+                // invoke-static/range {v1 .. v2}, method@0; move-result v0; return v0
+                insns: vec![0x0277, 0x0000, 0x0001, 0x000a, 0x000f],
+            },
+        ]);
+        let dex =
+            DexFile::parse(&bytes, &crate::dex::DexLimits::default()).expect("parse synthetic DEX");
+
+        let result = execute_static_integer_method(&dex, TEST_CLASS, "callerRange", &[19, 23])
+            .expect("execute invoke-static/range");
+
+        assert_eq!(result.execution.return_value, EngineReturn::Int(42));
+        assert_eq!(result.execution.instruction_steps, 5);
+    }
+
+    #[test]
+    fn supports_void_static_calls_without_move_result() {
+        let bytes = build_dex(&[
+            TestMethod {
+                name: "touch",
+                return_type: "V",
+                params: vec!["I"],
+                registers: 1,
+                ins: 1,
+                outs: 0,
+                insns: vec![0x000e],
+            },
+            TestMethod {
+                name: "caller",
+                return_type: "I",
+                params: vec!["I"],
+                registers: 1,
+                ins: 1,
+                outs: 1,
+                // invoke-static {v0}, method@0; return v0
+                insns: vec![0x0171, 0x0000, 0x0000, 0x000f],
+            },
+        ]);
+        let dex =
+            DexFile::parse(&bytes, &crate::dex::DexLimits::default()).expect("parse synthetic DEX");
+
+        let result = execute_static_integer_method(&dex, TEST_CLASS, "caller", &[42])
+            .expect("execute void static call");
+
+        assert_eq!(result.execution.return_value, EngineReturn::Int(42));
+        assert_eq!(result.execution.instruction_steps, 3);
     }
 
     #[test]
