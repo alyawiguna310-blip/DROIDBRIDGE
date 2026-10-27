@@ -353,6 +353,7 @@ fn probe_methods(
         .iter()
         .position(|name| name == dex_entry)
         .expect("requested DEX was validated and loaded");
+    println!("loaded DEX bundle: {}", entry_names.join(", "));
     let candidates = list_static_scalar_methods(&dexes[root_dex_index], class_filter)?;
     let attempts = candidates.len().min(MAX_PROBE_METHODS);
 
@@ -424,6 +425,7 @@ fn run_method(
         .iter()
         .position(|name| name == dex_entry)
         .expect("requested DEX was validated and loaded");
+    println!("loaded DEX bundle: {}", entry_names.join(", "));
     let report = execute_static_scalar_method_in_dex_set_at(
         &dexes,
         root_dex_index,
