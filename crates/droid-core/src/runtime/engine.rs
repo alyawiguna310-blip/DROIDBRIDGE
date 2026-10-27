@@ -85,6 +85,10 @@ pub enum MethodExecutionError {
     AmbiguousMethod {
         signature: String,
     },
+    ReturnTypeMismatch {
+        signature: String,
+        expected: String,
+    },
 }
 
 impl fmt::Display for MethodExecutionError {
@@ -131,6 +135,13 @@ impl fmt::Display for MethodExecutionError {
             Self::AmbiguousMethod { signature } => {
                 write!(f, "multiple methods match {signature}")
             }
+            Self::ReturnTypeMismatch {
+                signature,
+                expected,
+            } => write!(
+                f,
+                "method {signature} did not return the declared scalar value ({expected})"
+            ),
         }
     }
 }
@@ -149,11 +160,28 @@ impl From<EngineError> for MethodExecutionError {
     }
 }
 
-/// List methods whose signature is supported by the current execution API.
+/// DEX scalar values represented in a single 32-bit register by this engine.
+fn is_int_like_type(ty: &str) -> bool {
+    matches!(ty, "I" | "Z" | "B" | "S" | "C")
+}
+
+/// Normalize a DEX scalar result or argument to its declared type width.
+fn normalize_int_like(ty: &str, value: i32) -> i32 {
+    match ty {
+        "Z" => i32::from(value != 0),
+        "B" => i32::from(value as i8),
+        "S" => i32::from(value as i16),
+        "C" => i32::from(value as u16),
+        _ => value,
+    }
+}
+
+/// List static scalar methods supported by the current execution API.
 ///
-/// This checks metadata only; it does not guarantee that every instruction
-/// inside the method is supported. Results follow the class/method order in
-/// the DEX file and can be filtered to one class descriptor.
+/// Integer, boolean, byte, short, and char values are represented in one
+/// 32-bit register. This checks metadata only; method bodies may still contain
+/// unsupported instructions. Results follow DEX class/method order and can be
+/// filtered to one class descriptor.
 pub fn list_static_integer_methods(
     dex: &DexFile<'_>,
     class_filter: Option<&str>,
@@ -176,7 +204,8 @@ pub fn list_static_integer_methods(
                 continue;
             }
             let signature = dex.method_signature(method.method_idx)?;
-            if signature.return_type == "I" && signature.parameter_types.iter().all(|ty| ty == "I")
+            if is_int_like_type(&signature.return_type)
+                && signature.parameter_types.iter().all(|ty| is_int_like_type(ty))
             {
                 found.push(signature);
             }
@@ -185,14 +214,14 @@ pub fn list_static_integer_methods(
     Ok(found)
 }
 
-/// Resolve and execute a static integer method from a parsed DEX file.
+/// Resolve and execute a static scalar method from a parsed DEX file.
 ///
-/// Only methods returning a 32-bit integer and taking zero or more 32-bit
-/// integer arguments are accepted. Instance methods, object/reference
-/// parameters, wide values, method calls, and other Android runtime behavior
-/// are outside this engine's scope. The selected code item is passed to the
-/// bounded interpreter, which rejects unsupported instructions and try/catch
-/// tables.
+/// Only methods returning int, boolean, byte, short, or char and taking zero
+/// or more of those scalar argument types are accepted. Each supplied
+/// parameter is normalized to the declared type width. Object/reference
+/// parameters, wide values, and general Android runtime behavior remain
+/// outside this engine's scope. Unsupported instructions and try/catch tables
+/// are rejected by the bounded interpreter.
 pub fn execute_static_integer_method(
     dex: &DexFile<'_>,
     class_descriptor: &str,
@@ -268,7 +297,8 @@ pub fn execute_static_integer_method(
     let supported: Vec<_> = matching_arity
         .into_iter()
         .filter(|(_, signature)| {
-            signature.return_type == "I" && signature.parameter_types.iter().all(|ty| ty == "I")
+            is_int_like_type(&signature.return_type)
+                && signature.parameter_types.iter().all(|ty| is_int_like_type(ty))
         })
         .collect();
     if supported.is_empty() {
@@ -293,11 +323,28 @@ pub fn execute_static_integer_method(
         max_steps: engine.limits.max_instruction_steps,
         steps: 0,
     };
+    let normalized_parameters: Vec<i32> = signature
+        .parameter_types
+        .iter()
+        .zip(parameters.iter().copied())
+        .map(|(ty, value)| normalize_int_like(ty, value))
+        .collect();
     let mut resolver = |target_method_idx: u32, arguments: &[i32], budget: &mut ExecutionBudget| {
         execute_dex_method_index(dex, target_method_idx, arguments, &engine, budget, 1)
     };
-    let execution =
-        engine.execute_with_budget(&code, parameters, &mut budget, Some(&mut resolver))?;
+    let mut execution =
+        engine.execute_with_budget(&code, &normalized_parameters, &mut budget, Some(&mut resolver))?;
+    match execution.return_value {
+        EngineReturn::Int(value) => {
+            execution.return_value = EngineReturn::Int(normalize_int_like(&signature.return_type, value));
+        }
+        EngineReturn::Void => {
+            return Err(MethodExecutionError::ReturnTypeMismatch {
+                signature: method_signature_label(&signature),
+                expected: signature.return_type.clone(),
+            });
+        }
+    }
     Ok(MethodExecutionReport {
         signature,
         execution,
@@ -331,16 +378,16 @@ fn execute_dex_method_index(
             "method has no code item (abstract/native/external methods are unsupported)",
         ));
     }
-    if !signature.parameter_types.iter().all(|ty| ty == "I") {
+    if !signature.parameter_types.iter().all(|ty| is_int_like_type(ty)) {
         return Err(static_call_failed(
             method_idx,
-            "only 32-bit integer parameters are supported",
+            "only int, boolean, byte, short, and char parameters are supported",
         ));
     }
-    if signature.return_type != "I" && signature.return_type != "V" {
+    if signature.return_type != "V" && !is_int_like_type(&signature.return_type) {
         return Err(static_call_failed(
             method_idx,
-            "only int and void return types are supported",
+            "only int, boolean, byte, short, char, and void returns are supported",
         ));
     }
     if parameters.len() != signature.parameter_types.len() {
@@ -353,23 +400,32 @@ fn execute_dex_method_index(
     let code = dex
         .code_item(method.code_off)
         .map_err(|error| static_call_failed(method_idx, error))?;
+    let normalized_parameters: Vec<i32> = signature
+        .parameter_types
+        .iter()
+        .zip(parameters.iter().copied())
+        .map(|(ty, value)| normalize_int_like(ty, value))
+        .collect();
     let mut resolver = |child_method_idx: u32, arguments: &[i32], budget: &mut ExecutionBudget| {
         execute_dex_method_index(dex, child_method_idx, arguments, engine, budget, depth + 1)
     };
-    let report = engine.execute_with_budget(&code, parameters, budget, Some(&mut resolver))?;
+    let report =
+        engine.execute_with_budget(&code, &normalized_parameters, budget, Some(&mut resolver))?;
 
     match (signature.return_type.as_str(), report.return_value) {
-        ("I", EngineReturn::Int(value)) => Ok(EngineReturn::Int(value)),
+        ("I" | "Z" | "B" | "S" | "C", EngineReturn::Int(value)) => {
+            Ok(EngineReturn::Int(normalize_int_like(&signature.return_type, value)))
+        }
         ("V", EngineReturn::Void) => Ok(EngineReturn::Void),
-        ("I", EngineReturn::Void) => Err(static_call_failed(
+        ("I" | "Z" | "B" | "S" | "C", EngineReturn::Void) => Err(static_call_failed(
             method_idx,
-            "method is declared to return int but executed return-void",
+            "method has scalar return type but executed return-void",
         )),
         ("V", EngineReturn::Int(_)) => Err(static_call_failed(
             method_idx,
             "method is declared void but executed an integer return",
         )),
-        _ => unreachable!("only int and void signatures passed validation"),
+        _ => unreachable!("only scalar and void signatures passed validation"),
     }
 }
 
@@ -1507,6 +1563,86 @@ mod tests {
         assert_eq!(
             engine.execute_with_budget(&caller, &[19, 23], &mut budget, Some(&mut resolver)),
             Err(EngineError::InstructionStepLimitExceeded { max: 4 })
+        );
+    }
+
+    #[test]
+    fn normalizes_boolean_byte_char_and_short_scalar_signatures() {
+        let bytes = build_dex(&[
+            TestMethod {
+                name: "truthy",
+                return_type: "Z",
+                params: vec!["Z"],
+                registers: 2,
+                ins: 1,
+                outs: 0,
+                // const/4 v0, 1; return v0
+                insns: vec![0x1012, 0x000f],
+            },
+            TestMethod {
+                name: "asByte",
+                return_type: "B",
+                params: vec![],
+                registers: 1,
+                ins: 0,
+                outs: 0,
+                // const/16 v0, 255; return v0
+                insns: vec![0x0013, 255, 0x000f],
+            },
+            TestMethod {
+                name: "asChar",
+                return_type: "C",
+                params: vec![],
+                registers: 1,
+                ins: 0,
+                outs: 0,
+                // const/16 v0, -1; return v0
+                insns: vec![0x0013, 0xffff, 0x000f],
+            },
+            TestMethod {
+                name: "asShort",
+                return_type: "S",
+                params: vec![],
+                registers: 1,
+                ins: 0,
+                outs: 0,
+                insns: vec![0x0013, 0xffff, 0x000f],
+            },
+        ]);
+        let dex =
+            DexFile::parse(&bytes, &crate::dex::DexLimits::default()).expect("parse synthetic DEX");
+
+        let candidates =
+            list_static_integer_methods(&dex, Some(TEST_CLASS)).expect("list scalar candidates");
+        assert_eq!(candidates.len(), 4);
+
+        assert_eq!(
+            execute_static_integer_method(&dex, TEST_CLASS, "truthy", &[42])
+                .expect("execute boolean")
+                .execution
+                .return_value,
+            EngineReturn::Int(1)
+        );
+        assert_eq!(
+            execute_static_integer_method(&dex, TEST_CLASS, "asByte", &[])
+                .expect("execute byte")
+                .execution
+                .return_value,
+            EngineReturn::Int(-1)
+        );
+        assert_eq!(
+            execute_static_integer_method(&dex, TEST_CLASS, "asChar", &[])
+                .expect("execute char")
+                .execution
+                .return_value,
+            EngineReturn::Int(65_535)
+        );
+        assert_eq!(
+            execute_static_integer_method(&dex, TEST_CLASS, "asShort", &[])
+                .expect("execute short")
+                .execution
+                .return_value,
+            EngineReturn::Int(-1)
         );
     }
 
