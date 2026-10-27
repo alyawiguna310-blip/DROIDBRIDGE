@@ -7,7 +7,7 @@
 
 The shared core is intended to manage APK metadata, portable device profiles, runtime backends, and performance settings. The long-term goal is to run Android apps and games in host-integrated windows while using the host machine's actual CPU and GPU.
 
-> **Status: early scaffold.** This repository still has not demonstrated launching a real Android APK. It can inspect APKs without executing them, includes a Linux Waydroid CLI adapter, and provides a verified-launch preflight that checks the manifest package and backend readiness/capabilities before delegating to the adapter. The adapter is covered with a mocked-command test, but live Waydroid installation, graphics, and real-app execution have not yet been validated. Android framework compatibility, ART, ARM translation, and Google Play support remain separate milestones.
+> **Status: early scaffold.** This repository still has not demonstrated launching a real Android APK. It can inspect APKs, and its project-owned `runtime::engine::IntegerDexEngine` executes a small bounded subset of integer-only DEX methods supplied as parsed code items. A separate Linux Waydroid adapter and verified-launch preflight are also present, but live Waydroid installation, app compatibility, graphics, and full Android framework/ART behavior have not been validated.
 
 ## Initial configuration
 
@@ -27,9 +27,11 @@ Device identity profiles must not claim unsupported CPU instructions or GPU capa
   - `profile` — `DeviceProfile` schema and validation.
   - `registry` — `ProfileRegistry` for loading, lookup, and active-profile selection.
   - `errors` — typed errors (`ProfileError`, `ConfigError`, `RegistryError`, `ProfileIdError`).
-  - `runtime` — runtime-backend trait and an initial Linux `WaydroidBackend` for readiness probing, APK installation/launch, process polling, and force-stop; integration with a live Waydroid installation is still unverified.
+  - `runtime::engine` — project-owned, resource-bounded integer-only DEX interpreter with register checks, branch-boundary validation, typed errors, and an instruction-step limit.
+  - `runtime::waydroid` — optional Linux adapter for the external Waydroid runtime; live integration remains unverified.
+
   - `launcher` — APK inspection and exact package matching before a runtime backend is allowed to launch.
-  - `dex` — bounds-checked DEX parser (no execution).
+  - `dex` — bounds-checked DEX parser; parsing and execution are separate modules.
   - `apk` — APK inspection: ZIP reader with limits, Android binary manifest parser, DEX discovery.
 - `profiles/POCO_F6.json` — example portable profile.
 - `docs/architecture.md` — staged architecture and implementation plan.
@@ -88,6 +90,33 @@ See `docs/architecture.md` for the full list of supported fields and known limit
 The `runtime` module is the seam between the portable core and a separately provisioned Android runtime. It defines backend identity, capability declarations, readiness probing, a validated launch request, and a session handle for observing/stopping a running app. Capabilities default to `Unknown` so a backend must not claim ARM64 execution or graphics support without verification.
 
 This contract is not an emulator. The initial `WaydroidBackend` calls the documented Waydroid CLI for status, APK installation, package launch, process polling, and force-stop. Waydroid itself must already be installed, initialized, and running; the adapter does not initialize it, start its session, inspect the APK manifest, verify the requested package matches the APK, or apply the selected device-profile identity. A successful command does not prove that an arbitrary APK is compatible. The adapter has mocked-command coverage, but still needs a live Waydroid test with a harmless test APK.
+
+## Project-owned DEX execution engine
+
+The `runtime::engine::IntegerDexEngine` module is our own initial execution component. It does not call Waydroid or another Android runtime. It accepts a parsed `CodeItem` and runs a tightly limited set of DEX instructions with 32-bit integer registers.
+
+Supported instruction families include moves, integer constants, returns, goto branches, integer comparisons, and integer arithmetic/bitwise operations. It rejects unsupported opcodes and methods with exception-handler tables. It checks branch targets are instruction boundaries and imposes configurable code-size and instruction-step limits.
+
+Example: execute a small synthetic method that computes 7 + 35 and returns 42.
+
+```rust
+use droid_core::dex::CodeItem;
+use droid_core::runtime::engine::{EngineReturn, IntegerDexEngine};
+
+let code = CodeItem {
+    registers_size: 3,
+    ins_size: 0,
+    outs_size: 0,
+    tries_size: 0,
+    debug_info_off: 0,
+    insns: vec![0x0013, 7, 0x0113, 35, 0x0290, 0x0100, 0x020f],
+};
+let result = IntegerDexEngine::default().execute(&code, [])?;
+assert_eq!(result.return_value, EngineReturn::Int(42));
+# Ok::<(), droid_core::runtime::engine::EngineError>(())
+```
+
+This is a genuine first step toward an internal runtime, not a complete JVM/ART implementation. It does not yet perform class loading, method invocation, object allocation, field access, arrays, Android framework calls, native execution, app lifecycle, or graphics. It cannot run APKPure or ordinary APKs end to end. Waydroid remains a separate optional adapter for live Android app execution while the internal engine grows.
 
 ## Verified APK launch preflight
 
