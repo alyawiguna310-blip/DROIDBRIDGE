@@ -297,7 +297,7 @@ fn probe_methods(
     let limits = ApkLimits::default();
     let mut bytes = Vec::new();
     let dex = load_dex_from_apk(apk, dex_entry, &limits, &mut bytes)?;
-    let candidates = list_static_integer_methods(&dex, class_filter)?;
+    let candidates = list_static_scalar_methods(&dex, class_filter)?;
     let attempts = candidates.len().min(MAX_PROBE_METHODS);
 
     println!(
@@ -362,7 +362,7 @@ fn run_method(
     let limits = ApkLimits::default();
     let mut bytes = Vec::new();
     let dex = load_dex_from_apk(apk, dex_entry, &limits, &mut bytes)?;
-    let report = execute_static_integer_method(&dex, class_descriptor, method_name, parameters)?;
+    let report = execute_static_scalar_method(&dex, class_descriptor, method_name, parameters)?;
     println!(
         "method: {}->{}({}){}",
         report.signature.class_descriptor,
