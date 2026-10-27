@@ -28,12 +28,11 @@ mod reader;
 pub(crate) mod testutil;
 
 pub use error::DexError;
-pub use interpreter::{
-    decode_instruction, execute_integer_method, DecodedInstruction, DexExecutionError,
-    IfCondition, Instruction, IntegerBinaryOp, MAX_INTERPRETED_CODE_UNITS,
-    MAX_INTERPRETER_STEPS,
-};
 pub use file::{
     ClassData, ClassDef, CodeItem, DexFile, DexHeader, DexLimits, EncodedField, EncodedMethod,
     FieldId, HEADER_SIZE, MethodId, MethodSignature, NO_INDEX, ProtoId,
+};
+pub use interpreter::{
+    DecodedInstruction, DexExecutionError, IfCondition, Instruction, IntegerBinaryOp,
+    MAX_INTERPRETED_CODE_UNITS, MAX_INTERPRETER_STEPS, decode_instruction, execute_integer_method,
 };
