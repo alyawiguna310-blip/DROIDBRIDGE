@@ -93,9 +93,9 @@ This contract is not an emulator. The initial `WaydroidBackend` calls the docume
 
 ## Project-owned DEX execution engine
 
-The `runtime::engine::IntegerDexEngine` module is our own initial execution component. It does not call Waydroid or another Android runtime. It can now resolve a static integer method from actual parsed DEX metadata and execute that method's `CodeItem`, in addition to accepting synthetic code items for tests.
+The `runtime::engine::IntegerDexEngine` module is our own initial execution component. It does not call Waydroid or another Android runtime. It can now resolve static scalar methods from actual parsed DEX metadata and execute their `CodeItem`, in addition to accepting synthetic code items for tests.
 
-Supported instruction families include moves; integer constants; returns; goto and integer-comparison branches; 32-bit arithmetic and bitwise instructions including two-address and literal variants; integer negation, bitwise not and byte/char/short narrowing; plus `invoke-static`, `invoke-static/range` and `move-result` for same-DEX static methods with integer parameters and integer/void returns. Nested calls share one instruction budget and are limited to 32 call levels. Unsupported opcodes, external/native/abstract callees, non-integer argument types and methods with exception-handler tables are rejected. Branch targets must be instruction boundaries, and register/code-size/argument bounds are checked.
+Supported instruction families include moves; integer constants; returns; goto and integer-comparison branches; 32-bit arithmetic/bitwise operations, including two-address and literal forms; integer negation and bitwise not; byte/char/short narrowing; and `invoke-static`, `invoke-static/range`, and `move-result` for same-DEX scalar methods. Scalar `int`, `boolean`, `byte`, `short`, and `char` values are represented in 32-bit registers and normalized to their declared width at method boundaries. Nested calls share one instruction budget and are limited to 32 call levels. Unsupported opcodes, external/native/abstract callees, reference/wide types, and methods with exception-handler tables are rejected. Branch targets must be instruction boundaries, and register/code-size/argument bounds are checked.
 
 Example: execute a small synthetic method that computes 7 + 35 and returns 42.
 
@@ -116,7 +116,7 @@ assert_eq!(result.return_value, EngineReturn::Int(42));
 # Ok::<(), droid_core::runtime::engine::EngineError>(())
 ```
 
-You can inspect method candidates, probe a bounded sample, and execute a supported static integer method directly from an APK:
+You can inspect method candidates, probe a bounded sample, and execute a supported static scalar method directly from an APK:
 
 ```sh
 cargo run -p droid-core --bin droidbridge -- methods "/path/to/app.apk" classes.dex
@@ -152,9 +152,9 @@ cargo run -p droid-core --bin droidbridge -- launch "/path/to/app.apk" com.examp
 - `inspect` prints the parsed manifest metadata, permissions, DEX parse results, native-library names, and warnings. It does not install or execute the APK.
 - `status` probes the existing Waydroid environment and prints the adapter's declared capabilities.
 - `engine-demo` executes a synthetic integer DEX method entirely in DROIDBRIDGE's own engine and should print `return: 42`; it does not need Waydroid.
-- `methods` lists static integer-returning method candidates from one DEX entry; an optional class descriptor narrows output.
-- `probe-methods` tries at most 20 candidates with zero-valued integer arguments, reporting which bodies the current engine can execute. This is a coverage probe, not a semantic correctness test; some methods require nonzero inputs.
-- `run-method` resolves a static `int(int, ...)` method from DEX metadata and executes it in the internal engine, without Waydroid. Only the current instruction subset is supported.
+- `methods` lists static scalar method candidates (`int`, `boolean`, `byte`, `short`, or `char`) from one DEX entry; an optional class descriptor narrows output.
+- `probe-methods` tries at most 20 candidates with zero-valued integer-like arguments, reporting which bodies the current engine can execute. This is a coverage probe, not a semantic correctness test; some methods require nonzero inputs.
+- `run-method` resolves and executes a static scalar method from DEX metadata without Waydroid. It takes signed 32-bit command-line values, normalizes them to the declared scalar parameter types, and normalizes scalar returns.
 - `launch` runs the verified preflight before delegating to Waydroid, then waits for the target process to be observed. The package name must exactly match the APK manifest. If omitted, the profile id defaults to `POCO_F6`.
 
 The CLI does not install or initialize Waydroid, start its session, apply device-identity spoofing, or prove general app compatibility. The profile id is currently carried as launch-request metadata only. A real launch has not yet been verified on a live Waydroid installation.
