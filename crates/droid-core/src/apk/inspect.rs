@@ -367,8 +367,8 @@ mod tests {
         let path = temp_path("read-dex");
         std::fs::write(&path, &apk).expect("write test apk");
 
-        let bytes = read_dex_entry(&path, "classes.dex", &ApkLimits::default())
-            .expect("read DEX entry");
+        let bytes =
+            read_dex_entry(&path, "classes.dex", &ApkLimits::default()).expect("read DEX entry");
         assert_eq!(bytes, sample_dex());
         assert!(matches!(
             read_dex_entry(&path, "AndroidManifest.xml", &ApkLimits::default()),
