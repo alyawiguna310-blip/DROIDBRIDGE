@@ -1205,7 +1205,7 @@ mod tests {
             // const/16 v1, literal; unary-op v0, v1; return v0.
             let value = input as u16 as i16;
             let mut units = vec![0x0113, value as u16];
-            units.push((0x1 << 8) | u16::from(opcode));
+            units.push(0x1000 | u16::from(opcode));
             units.push(0x000f);
             let method = code(2, 0, &units);
             assert_eq!(
