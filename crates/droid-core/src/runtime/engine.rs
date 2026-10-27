@@ -308,7 +308,7 @@ impl IntegerDexEngine {
                     let value = (u32::from(code.insns[pc + 1]) << 16) as i32;
                     write_register(&mut registers, dest, value, pc)?;
                 }
-                0x28 | 0x29 | 0x2a => {
+                0x28..=0x2a => {
                     next_pc = instruction.branch_target.expect("goto target is decoded");
                 }
                 0x32..=0x37 => {
