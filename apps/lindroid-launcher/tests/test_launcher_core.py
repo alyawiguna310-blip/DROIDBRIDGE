@@ -1,6 +1,14 @@
+import tempfile
 import unittest
+from pathlib import Path
 
-from launcher_core import AppEntry, is_valid_package_name, parse_app_list
+from launcher_core import (
+    AppEntry,
+    is_valid_package_name,
+    load_hidden_packages,
+    parse_app_list,
+    save_hidden_packages,
+)
 
 
 class PackageNameTests(unittest.TestCase):
@@ -42,6 +50,32 @@ class AppListTests(unittest.TestCase):
             "Name: Duplicate\npackageName: org.example.app\n"
         )
         self.assertEqual(apps, [AppEntry("First label", "org.example.app")])
+
+
+class HiddenPackagesTests(unittest.TestCase):
+    def test_missing_preferences_file_means_no_hidden_apps(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "preferences" / "hidden-apps.txt"
+            self.assertEqual(load_hidden_packages(path), set())
+
+    def test_hidden_packages_round_trip_and_invalid_lines_are_ignored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "preferences" / "hidden-apps.txt"
+            save_hidden_packages(
+                path,
+                {"org.example.game", "com.android.settings", "--not-a-package"},
+            )
+            self.assertEqual(
+                load_hidden_packages(path),
+                {"org.example.game", "com.android.settings"},
+            )
+
+    def test_empty_hidden_list_is_saved_as_empty_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "hidden-apps.txt"
+            save_hidden_packages(path, set())
+            self.assertTrue(path.exists())
+            self.assertEqual(path.read_text(encoding="utf-8"), "")
 
 
 if __name__ == "__main__":

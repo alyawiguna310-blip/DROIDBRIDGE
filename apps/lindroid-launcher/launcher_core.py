@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 import subprocess
 
 
@@ -50,6 +51,32 @@ def parse_app_list(output: str) -> list[AppEntry]:
             current_name = None
 
     return sorted(entries, key=lambda entry: (entry.name.casefold(), entry.package))
+
+
+def load_hidden_packages(path: Path) -> set[str]:
+    """Read hidden package names; a missing preferences file means none are hidden."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return set()
+
+    return {
+        package
+        for line in lines
+        if is_valid_package_name(package := line.strip())
+    }
+
+
+def save_hidden_packages(path: Path, packages: set[str]) -> None:
+    """Atomically save package names hidden only from this launcher."""
+    normalized = sorted(
+        package for package in packages if is_valid_package_name(package)
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_name(path.name + ".tmp")
+    content = "".join(f"{package}\n" for package in normalized)
+    temporary_path.write_text(content, encoding="utf-8")
+    temporary_path.replace(path)
 
 
 def run_waydroid(arguments: list[str], timeout: float = 20.0) -> str:
