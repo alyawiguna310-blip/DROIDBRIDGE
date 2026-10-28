@@ -225,7 +225,6 @@ where
         "help" | "--help" | "-h" => Err("help accepts no additional arguments".to_owned()),
         "inspect" => Err("usage: droidbridge inspect <apk-path>".to_owned()),
         "status" => Err("usage: droidbridge status".to_owned()),
-           droidbridge runtime-info\n\
         "runtime-info" => Err("usage: droidbridge runtime-info".to_owned()),
         "engine-demo" => Err("usage: droidbridge engine-demo".to_owned()),
         "probe-methods" => Err(
