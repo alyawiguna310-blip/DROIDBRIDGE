@@ -16,6 +16,31 @@ use std::time::{Duration, Instant};
 
 const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Selected properties reported by the Android guest running in Waydroid.
+///
+/// This describes the guest system, not a host-side ART library. Android API
+/// level 21 and later use ART for app execution, so ART availability is inferred
+/// from the reported API level rather than claimed from an independent binary probe.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AndroidRuntimeInfo {
+    pub android_release: Option<String>,
+    pub api_level: Option<u32>,
+    pub build_fingerprint: Option<String>,
+    pub supported_abis: Vec<String>,
+    pub zygote_mode: Option<String>,
+    pub jit_enabled: Option<bool>,
+    pub boot_completed: Option<bool>,
+}
+
+impl AndroidRuntimeInfo {
+    /// Whether the guest API level implies the ART runtime family.
+    ///
+    /// None means that the API level could not be read.
+    pub fn art_expected(&self) -> Option<bool> {
+        self.api_level.map(|api_level| api_level >= 21)
+    }
+}
+
 /// Adapter for an existing Waydroid installation on Linux.
 ///
 /// By default the executable is resolved as waydroid through the process PATH.
@@ -62,6 +87,75 @@ impl WaydroidBackend {
             operation,
             message,
         }
+    }
+
+    /// Read a small, explicit set of properties from the running Android guest.
+    ///
+    /// Waydroid supplies the Android userspace (including ART and framework
+    /// services). DROIDBRIDGE does not embed or replace ART itself.
+    pub fn android_runtime_info(&self) -> Result<AndroidRuntimeInfo, RuntimeError> {
+        match self.probe()? {
+            BackendStatus::Ready => {}
+            status => {
+                return Err(RuntimeError::BackendUnavailable {
+                    backend_id: self.info.id.clone(),
+                    reason: format!(
+                        "Android guest properties require a ready Waydroid session; current status: {status:?}"
+                    ),
+                });
+            }
+        }
+
+        let release = self.get_android_property("ro.build.version.release")?;
+        let api_level = self
+            .get_android_property("ro.build.version.sdk")?
+            .and_then(|value| value.parse::<u32>().ok());
+        let fingerprint = self.get_android_property("ro.build.fingerprint")?;
+        let abis = self.get_android_property("ro.product.cpu.abilist")?;
+        let zygote_mode = self.get_android_property("ro.zygote")?;
+        let jit_enabled =
+            parse_android_bool(self.get_android_property("dalvik.vm.usejit")?.as_deref());
+        let boot_completed =
+            parse_android_bool(self.get_android_property("sys.boot_completed")?.as_deref());
+
+        Ok(AndroidRuntimeInfo {
+            android_release: release,
+            api_level,
+            build_fingerprint: fingerprint,
+            supported_abis: abis
+                .unwrap_or_default()
+                .split(',')
+                .map(str::trim)
+                .filter(|abi| !abi.is_empty())
+                .map(str::to_owned)
+                .collect(),
+            zygote_mode,
+            jit_enabled,
+            boot_completed,
+        })
+    }
+
+    fn get_android_property(&self, property: &str) -> Result<Option<String>, RuntimeError> {
+        let output = self.run(
+            RuntimeOperation::Probe,
+            [
+                OsString::from("shell"),
+                OsString::from("getprop"),
+                OsString::from(property),
+            ],
+        )?;
+        if !output.status.success() {
+            return Err(self.command_error(
+                RuntimeOperation::Probe,
+                format!(
+                    "Waydroid could not read Android property {property:?}: {}",
+                    output_message(&output)
+                ),
+            ));
+        }
+
+        let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        Ok((!value.is_empty() && value != "(null)").then_some(value))
     }
 
     fn run(
@@ -236,6 +330,14 @@ impl RuntimeBackend for WaydroidBackend {
     }
 }
 
+fn parse_android_bool(value: Option<&str>) -> Option<bool> {
+    match value?.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "y" | "yes" => Some(true),
+        "0" | "false" | "n" | "no" => Some(false),
+        _ => None,
+    }
+}
+
 fn parse_status_output(output: &str) -> Option<BackendStatus> {
     let lower = output.to_ascii_lowercase();
 
@@ -395,6 +497,29 @@ impl RuntimeSession for WaydroidSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn android_runtime_info_only_inferrs_art_from_android_api_level() {
+        assert_eq!(
+            AndroidRuntimeInfo { api_level: Some(34), ..Default::default() }.art_expected(),
+            Some(true)
+        );
+        assert_eq!(
+            AndroidRuntimeInfo { api_level: Some(20), ..Default::default() }.art_expected(),
+            Some(false)
+        );
+        assert_eq!(AndroidRuntimeInfo::default().art_expected(), None);
+    }
+
+    #[test]
+    fn android_boolean_properties_are_parsed_without_guessing() {
+        assert_eq!(parse_android_bool(Some("1")), Some(true));
+        assert_eq!(parse_android_bool(Some("true")), Some(true));
+        assert_eq!(parse_android_bool(Some("0")), Some(false));
+        assert_eq!(parse_android_bool(Some("false")), Some(false));
+        assert_eq!(parse_android_bool(Some("unknown")), None);
+        assert_eq!(parse_android_bool(None), None);
+    }
 
     #[test]
     fn status_parser_recognizes_running_and_stopped_states() {
