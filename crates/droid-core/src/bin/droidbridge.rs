@@ -833,7 +833,9 @@ fn dump_method(
                                 }
                             }
                         }
-                        _ => println!("truncated const-string/jumbo instruction at selected code unit"),
+                        _ => println!(
+                            "truncated const-string/jumbo instruction at selected code unit"
+                        ),
                     }
                 }
             }
