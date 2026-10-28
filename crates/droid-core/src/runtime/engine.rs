@@ -1645,7 +1645,7 @@ fn decode_program(
             | 0x22
             | 0x29
             | 0x32..=0x3d
-            | 0x60..=0x6d
+            | 0x52..=0x6d
             | 0x90..=0x9a
             | 0xd0..=0xe2 => 2,
             0x03 | 0x09 | 0x14 | 0x1b | 0x2a | 0x6e..=0x72 | 0x74..=0x78 => 3,
@@ -2046,9 +2046,16 @@ mod tests {
     #[test]
     fn branches_over_decodable_but_unsupported_field_and_virtual_instructions() {
         // if-eqz v0, +4; sget-object v0, field@0; return v0
-        let field_read = code(1, 0, &[0x0038, 4, 0x0062, 0, 0x000f]);
+        let static_field_read = code(1, 0, &[0x0038, 4, 0x0062, 0, 0x000f]);
         assert_eq!(
-            run(&field_read, &[]).unwrap().return_value,
+            run(&static_field_read, &[]).unwrap().return_value,
+            EngineReturn::Int(0)
+        );
+
+        // if-eqz v0, +4; iget v0, v0, field@0; return v0
+        let instance_field_read = code(1, 0, &[0x0038, 4, 0x0052, 0, 0x000f]);
+        assert_eq!(
+            run(&instance_field_read, &[]).unwrap().return_value,
             EngineReturn::Int(0)
         );
 
@@ -2074,12 +2081,21 @@ mod tests {
 
     #[test]
     fn refuses_decodable_but_unsupported_field_and_virtual_instructions_when_reached() {
-        let field_read = code(1, 0, &[0x0062, 0, 0x000f]);
+        let static_field_read = code(1, 0, &[0x0062, 0, 0x000f]);
         assert_eq!(
-            run(&field_read, &[]),
+            run(&static_field_read, &[]),
             Err(EngineError::UnsupportedOpcode {
                 pc: 0,
                 opcode: 0x62
+            })
+        );
+
+        let instance_field_read = code(1, 0, &[0x0052, 0, 0x000f]);
+        assert_eq!(
+            run(&instance_field_read, &[]),
+            Err(EngineError::UnsupportedOpcode {
+                pc: 0,
+                opcode: 0x52
             })
         );
 
