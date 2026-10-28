@@ -1,38 +1,43 @@
 # LINDROID Launcher
 
-A tiny native GTK4 desktop frontend for launching apps that are already installed in Waydroid. It does not show Android's home screen or embed an emulator window: when Waydroid multi-window mode is enabled, each app is opened through Waydroid as its own desktop window.
+LINDROID is a minimal native GTK4 frontend for applications already installed in Waydroid. It runs with the system Python GTK4 bindings, requires no Rust GTK build dependencies, and does not show Android's home screen. When Waydroid multi-window mode is enabled, each app launches through Waydroid in its own desktop window.
 
-## Scope
+## Features
 
-- Lists installed apps through `waydroid app list`.
-- Filters by app label or Android package name.
-- Launches an app through `waydroid app launch <package>`.
-- Uses the existing Waydroid image and data; it does not download, initialize, remove, or modify Android images.
-- Does not ask for root privileges.
-
-The current LINDROID launcher is a desktop-side program, not a custom Android system image. It cannot make the existing 2.3 GB system/vendor image become a 1 GB image. Image slimming is a separate source-build task.
+- Lists installed apps using `waydroid app list`.
+- Filters by app label or package name.
+- Opens an app using `waydroid app launch <package>`.
+- Uses subprocess argument arrays; it never invokes a host shell to build commands.
+- Does not require root and does not download, initialize, remove, or modify Android images.
 
 ## Requirements
 
-- Linux with Wayland or another supported GTK desktop.
-- GTK4 development files and `pkg-config`.
-- Rust stable toolchain.
-- A working Waydroid installation.
+- A working Waydroid installation and a started session.
+- GTK4 runtime and Python GObject bindings for the system Python. On this Zorin setup these are already installed, so no GTK development package is needed.
 
-For Ubuntu/Zorin, the GTK build dependency is provided by `libgtk-4-dev`. Do not install build dependencies until there is enough free disk space.
+## Run without installing
 
-## Build and run
-
-From the DROIDBRIDGE repository root:
+From the repository root:
 
 ```bash
-cargo fmt --manifest-path apps/lindroid-launcher/Cargo.toml -- --check
-cargo test --manifest-path apps/lindroid-launcher/Cargo.toml
-cargo run --manifest-path apps/lindroid-launcher/Cargo.toml
+/usr/bin/python3 apps/lindroid-launcher/lindroid_launcher.py
 ```
 
-The launcher does not start the privileged container. Start Waydroid using its normal system service/session flow, then open LINDROID and press **Refresh**.
+Check parser tests with:
 
-## Google Play Store
+```bash
+PYTHONPATH=apps/lindroid-launcher /usr/bin/python3 -m unittest discover \
+  -s apps/lindroid-launcher/tests -v
+```
 
-Your existing Waydroid config currently points to a **VANILLA** system image, which does not include Google Play Store. The launcher will list and open apps that are installed in the current image. Play Store support requires a separate, compatible GAPPS image and enough free disk space; this project deliberately does not replace the existing image automatically.
+## Install into the current user's application menu
+
+```bash
+bash scripts/install-lindroid-launcher.sh
+```
+
+The installer copies the small Python files into `~/.local/share/lindroid`, creates a user-local launcher, and installs a desktop entry. It does not call apt or require sudo.
+
+## Google Play Store and image size
+
+The current Waydroid configuration uses a **VANILLA** image, which does not include Google Play Store. LINDROID lists only apps installed in the current image; it cannot add Play Store by itself. GAPPS support and minimizing the Android system image are separate tasks that require a compatible image/build and additional storage. This launcher does not turn the existing 2.3 GB system/vendor images into a 1 GB image.
