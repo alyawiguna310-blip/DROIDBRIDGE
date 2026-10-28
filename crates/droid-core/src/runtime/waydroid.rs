@@ -595,6 +595,19 @@ if [ "$1" = "status" ]; then
 fi
 if [ "$1" = "app" ] && [ "$2" = "install" ]; then exit 0; fi
 if [ "$1" = "app" ] && [ "$2" = "launch" ]; then exit 0; fi
+if [ "$1" = "shell" ] && [ "$2" = "getprop" ]; then
+  case "$3" in
+    ro.build.version.release) printf '13\\n' ;;
+    ro.build.version.sdk) printf '33\\n' ;;
+    ro.build.fingerprint) printf 'waydroid/lineage_x86_64/device:13/test-keys\\n' ;;
+    ro.product.cpu.abilist) printf 'x86_64,x86\\n' ;;
+    ro.zygote) printf 'zygote64_32\\n' ;;
+    dalvik.vm.usejit) printf 'true\\n' ;;
+    sys.boot_completed) printf '1\\n' ;;
+    *) exit 1 ;;
+  esac
+  exit 0
+fi
 if [ "$1" = "shell" ] && [ "$2" = "pidof" ]; then
   if [ -f {stopped} ]; then exit 1; fi
   printf '123\n'
@@ -622,6 +635,21 @@ exit 2
             backend.probe().expect("probe fake backend"),
             BackendStatus::Ready
         );
+        let runtime_info = backend
+            .android_runtime_info()
+            .expect("query Android properties from fake guest");
+        assert_eq!(runtime_info.android_release.as_deref(), Some("13"));
+        assert_eq!(runtime_info.api_level, Some(33));
+        assert_eq!(
+            runtime_info.build_fingerprint.as_deref(),
+            Some("waydroid/lineage_x86_64/device:13/test-keys")
+        );
+        assert_eq!(runtime_info.supported_abis, vec!["x86_64", "x86"]);
+        assert_eq!(runtime_info.zygote_mode.as_deref(), Some("zygote64_32"));
+        assert_eq!(runtime_info.jit_enabled, Some(true));
+        assert_eq!(runtime_info.boot_completed, Some(true));
+        assert_eq!(runtime_info.art_expected(), Some(true));
+
         let request =
             LaunchRequest::new(&apk, "com.example.game", "POCO_F6").expect("valid launch request");
         let mut session = backend
