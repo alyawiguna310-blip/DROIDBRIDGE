@@ -2049,7 +2049,10 @@ mod tests {
         let method = code(1, 0, &[0x0070, 0, 0, 0x000e]);
         assert_eq!(
             run(&method, &[]),
-            Err(EngineError::UnsupportedOpcode { pc: 0, opcode: 0x70 })
+            Err(EngineError::UnsupportedOpcode {
+                pc: 0,
+                opcode: 0x70
+            })
         );
     }
 
