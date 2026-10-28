@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=LINDROID
+Comment=Launch Android apps in separate Waydroid windows
+Exec=@LINDROID_BIN@
+Icon=applications-games
+Terminal=false
+Categories=Utility;System;
+StartupNotify=true

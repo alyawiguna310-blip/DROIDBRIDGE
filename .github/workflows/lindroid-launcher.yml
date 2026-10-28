@@ -1,0 +1,33 @@
+name: LINDROID launcher checks
+
+on:
+  pull_request:
+    paths:
+      - "apps/lindroid-launcher/**"
+      - "scripts/install-lindroid-launcher.sh"
+      - ".github/workflows/lindroid-launcher.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-launcher:
+    name: Test Python GTK launcher
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check Python syntax
+        run: python -m py_compile apps/lindroid-launcher/launcher_core.py apps/lindroid-launcher/lindroid_launcher.py
+
+      - name: Run parser tests
+        env:
+          PYTHONPATH: apps/lindroid-launcher
+        run: python -m unittest discover -s apps/lindroid-launcher/tests -v
