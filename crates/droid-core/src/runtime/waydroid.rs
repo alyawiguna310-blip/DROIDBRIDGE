@@ -647,7 +647,7 @@ exit 2
             runtime_info.build_fingerprint.as_deref(),
             Some("waydroid/lineage_x86_64/device:13/test-keys")
         );
-        assert_eq!(runtime_info.supported_abis, vec!["x86_64", "x86"]);
+        assert_eq!(runtime_info.supported_abis, vec!["x86_64".to_owned(), "x86".to_owned()]);
         assert_eq!(runtime_info.zygote_mode.as_deref(), Some("zygote64_32"));
         assert_eq!(runtime_info.jit_enabled, Some(true));
         assert_eq!(runtime_info.boot_completed, Some(true));
