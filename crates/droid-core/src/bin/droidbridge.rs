@@ -264,7 +264,7 @@ fn print_usage() {
            methods      List static scalar method candidates (int/boolean/byte/short/char).\n\
            probe-methods Execute up to 20 candidates with zero-valued scalar arguments to measure current engine coverage.\n\
            run-method   Execute a supported static scalar method from actual DEX metadata.\n\
-           dump-method  Print raw DEX code units and resolve a selected invoke instruction.\n\
+           dump-method  Print raw DEX code units and resolve a selected invoke or field instruction.\n\
            launch       Verify the APK package and backend before delegating launch.\n\n\
          Method execution supports only a small DEX instruction subset; it does not run a whole APK."
     );
