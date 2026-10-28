@@ -597,13 +597,13 @@ if [ "$1" = "app" ] && [ "$2" = "install" ]; then exit 0; fi
 if [ "$1" = "app" ] && [ "$2" = "launch" ]; then exit 0; fi
 if [ "$1" = "shell" ] && [ "$2" = "getprop" ]; then
   case "$3" in
-    ro.build.version.release) printf '13\\n' ;;
-    ro.build.version.sdk) printf '33\\n' ;;
-    ro.build.fingerprint) printf 'waydroid/lineage_x86_64/device:13/test-keys\\n' ;;
-    ro.product.cpu.abilist) printf 'x86_64,x86\\n' ;;
-    ro.zygote) printf 'zygote64_32\\n' ;;
-    dalvik.vm.usejit) printf 'true\\n' ;;
-    sys.boot_completed) printf '1\\n' ;;
+    ro.build.version.release) printf '13\n' ;;
+    ro.build.version.sdk) printf '33\n' ;;
+    ro.build.fingerprint) printf 'waydroid/lineage_x86_64/device:13/test-keys\n' ;;
+    ro.product.cpu.abilist) printf 'x86_64,x86\n' ;;
+    ro.zygote) printf 'zygote64_32\n' ;;
+    dalvik.vm.usejit) printf 'true\n' ;;
+    sys.boot_completed) printf '1\n' ;;
     *) exit 1 ;;
   esac
   exit 0
