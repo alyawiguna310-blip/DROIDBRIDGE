@@ -1645,11 +1645,16 @@ fn decode_program(
             | 0x22
             | 0x29
             | 0x32..=0x3d
+            | 0x60..=0x6d
             | 0x90..=0x9a
             | 0xd0..=0xe2 => 2,
-            0x03 | 0x09 | 0x14 | 0x1b | 0x2a => 3,
-            0x70 | 0x76 => 3,
-            0x71 | 0x77 if allow_static_calls => 3,
+            0x03
+            | 0x09
+            | 0x14
+            | 0x1b
+            | 0x2a
+            | 0x6e..=0x72
+            | 0x74..=0x78 => 3,
             _ => return Err(EngineError::UnsupportedOpcode { pc, opcode }),
         };
 
@@ -2045,6 +2050,23 @@ mod tests {
     }
 
     #[test]
+    fn branches_over_decodable_but_unsupported_field_and_virtual_instructions() {
+        // if-eqz v0, +4; sget-object v0, field@0; return v0
+        let field_read = code(1, 0, &[0x0038, 4, 0x0062, 0, 0x000f]);
+        assert_eq!(
+            run(&field_read, &[]).unwrap().return_value,
+            EngineReturn::Int(0)
+        );
+
+        // if-eqz v0, +5; invoke-virtual {}; return v0
+        let virtual_call = code(1, 0, &[0x0038, 5, 0x006e, 0, 0, 0x000f]);
+        assert_eq!(
+            run(&virtual_call, &[]).unwrap().return_value,
+            EngineReturn::Int(0)
+        );
+    }
+
+    #[test]
     fn refuses_decodable_but_unsupported_invoke_direct_when_reached() {
         let method = code(1, 0, &[0x0070, 0, 0, 0x000e]);
         assert_eq!(
@@ -2052,6 +2074,27 @@ mod tests {
             Err(EngineError::UnsupportedOpcode {
                 pc: 0,
                 opcode: 0x70
+            })
+        );
+    }
+
+    #[test]
+    fn refuses_decodable_but_unsupported_field_and_virtual_instructions_when_reached() {
+        let field_read = code(1, 0, &[0x0062, 0, 0x000f]);
+        assert_eq!(
+            run(&field_read, &[]),
+            Err(EngineError::UnsupportedOpcode {
+                pc: 0,
+                opcode: 0x62
+            })
+        );
+
+        let virtual_call = code(1, 0, &[0x006e, 0, 0, 0x000e]);
+        assert_eq!(
+            run(&virtual_call, &[]),
+            Err(EngineError::UnsupportedOpcode {
+                pc: 0,
+                opcode: 0x6e
             })
         );
     }
