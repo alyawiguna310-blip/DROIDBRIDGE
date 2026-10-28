@@ -1,5 +1,5 @@
-use gtk4 as gtk;
 use gtk::prelude::*;
+use gtk4 as gtk;
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::process::{Command, Output};
@@ -249,7 +249,10 @@ fn launch_app(package: &str) -> Result<(), String> {
     if result.status.success() {
         Ok(())
     } else {
-        Err(command_failure("Waydroid could not launch the app", &result))
+        Err(command_failure(
+            "Waydroid could not launch the app",
+            &result,
+        ))
     }
 }
 
@@ -257,7 +260,9 @@ fn run_waydroid(arguments: &[&str]) -> Result<String, String> {
     let result = Command::new("waydroid")
         .args(arguments)
         .output()
-        .map_err(|error| format!("Could not run Waydroid. Is it installed and on PATH? ({error})"))?;
+        .map_err(|error| {
+            format!("Could not run Waydroid. Is it installed and on PATH? ({error})")
+        })?;
 
     if result.status.success() {
         Ok(String::from_utf8_lossy(&result.stdout).into_owned())
@@ -277,7 +282,10 @@ fn command_failure(context: &str, output: &Output) -> String {
 
 fn field_value<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     let (field, value) = line.split_once(':')?;
-    field.trim().eq_ignore_ascii_case(key).then_some(value.trim())
+    field
+        .trim()
+        .eq_ignore_ascii_case(key)
+        .then_some(value.trim())
 }
 
 fn parse_app_list(input: &str) -> Vec<AppEntry> {
