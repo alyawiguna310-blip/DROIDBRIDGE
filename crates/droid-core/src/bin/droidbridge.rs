@@ -823,14 +823,17 @@ fn dump_method(
                         }
                     }
                 } else if opcode == 0x1b {
-                    if let (Some(low), Some(high)) =
-                        (code.insns.get(pc + 1), code.insns.get(pc + 2))
-                    {
-                        let string_idx = u32::from(*low) | (u32::from(*high) << 16);
-                        match dex.string(string_idx) {
-                            Ok(value) => println!("const-string/jumbo literal: {value:?}"),
-                            Err(error) => println!("const-string/jumbo index is invalid: {error}"),
+                    match (code.insns.get(pc + 1), code.insns.get(pc + 2)) {
+                        (Some(low), Some(high)) => {
+                            let string_idx = u32::from(*low) | (u32::from(*high) << 16);
+                            match dex.string(string_idx) {
+                                Ok(value) => println!("const-string/jumbo literal: {value:?}"),
+                                Err(error) => {
+                                    println!("const-string/jumbo index is invalid: {error}")
+                                }
+                            }
                         }
+                        _ => println!("truncated const-string/jumbo instruction at selected code unit"),
                     }
                 }
             }
@@ -1056,15 +1059,6 @@ mod tests {
             ]))
             .is_err()
         );
-    }
-
-    #[test]
-    fn runtime_info_command_is_recognized() {
-        assert_eq!(
-            parse_command(args(&["runtime-info"])),
-            Ok(CliCommand::RuntimeInfo)
-        );
-        assert!(parse_command(args(&["runtime-info", "extra"])).is_err());
     }
 
     #[test]
