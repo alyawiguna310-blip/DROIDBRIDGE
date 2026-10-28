@@ -499,15 +499,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn android_runtime_info_only_inferrs_art_from_android_api_level() {
-        assert_eq!(
-            AndroidRuntimeInfo { api_level: Some(34), ..Default::default() }.art_expected(),
-            Some(true)
-        );
-        assert_eq!(
-            AndroidRuntimeInfo { api_level: Some(20), ..Default::default() }.art_expected(),
-            Some(false)
-        );
+    fn android_runtime_info_infers_art_from_android_api_level() {
+        let modern = AndroidRuntimeInfo {
+            api_level: Some(34),
+            ..Default::default()
+        };
+        let legacy = AndroidRuntimeInfo {
+            api_level: Some(20),
+            ..Default::default()
+        };
+
+        assert_eq!(modern.art_expected(), Some(true));
+        assert_eq!(legacy.art_expected(), Some(false));
         assert_eq!(AndroidRuntimeInfo::default().art_expected(), None);
     }
 
