@@ -38,6 +38,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         CliCommand::Help => print_usage(),
         CliCommand::Inspect { apk } => inspect_apk(&apk)?,
         CliCommand::Status => print_status(&WaydroidBackend::default())?,
+        CliCommand::RuntimeInfo => print_runtime_info()?,
         CliCommand::EngineDemo => run_engine_demo()?,
         CliCommand::Methods {
             apk,
@@ -91,6 +92,7 @@ enum CliCommand {
         apk: PathBuf,
     },
     Status,
+    RuntimeInfo,
     EngineDemo,
     Methods {
         apk: PathBuf,
@@ -142,6 +144,7 @@ where
             apk: PathBuf::from(&arguments[1]),
         }),
         "status" if arguments.len() == 1 => Ok(CliCommand::Status),
+        "runtime-info" if arguments.len() == 1 => Ok(CliCommand::RuntimeInfo),
         "engine-demo" if arguments.len() == 1 => Ok(CliCommand::EngineDemo),
         "probe-methods" if (3..=4).contains(&arguments.len()) => Ok(CliCommand::ProbeMethods {
             apk: PathBuf::from(&arguments[1]),
@@ -222,6 +225,7 @@ where
         "help" | "--help" | "-h" => Err("help accepts no additional arguments".to_owned()),
         "inspect" => Err("usage: droidbridge inspect <apk-path>".to_owned()),
         "status" => Err("usage: droidbridge status".to_owned()),
+        "runtime-info" => Err("usage: droidbridge runtime-info".to_owned()),
         "engine-demo" => Err("usage: droidbridge engine-demo".to_owned()),
         "probe-methods" => Err(
             "usage: droidbridge probe-methods <apk-path> <dex-entry> [class-descriptor]".to_owned()
@@ -250,6 +254,7 @@ fn print_usage() {
          Usage:\n\
            droidbridge inspect <apk-path>\n\
            droidbridge status\n\
+           droidbridge runtime-info\n\
            droidbridge engine-demo\n\
            droidbridge methods <apk-path> <dex-entry> [class-descriptor]\n\
            droidbridge probe-methods <apk-path> <dex-entry> [class-descriptor]\n\
@@ -260,6 +265,7 @@ fn print_usage() {
          Commands:\n\
            inspect      Parse APK metadata without installing or executing it.\n\
            status       Probe the existing Waydroid installation/session.\n\
+           runtime-info Query Android guest properties and report ART compatibility level.\n\
            engine-demo  Run a synthetic integer method in our own DEX engine.\n\
            methods      List static scalar method candidates (int/boolean/byte/short/char).\n\
            probe-methods Execute up to 20 candidates with zero-valued scalar arguments to measure current engine coverage.\n\
@@ -579,6 +585,61 @@ fn print_apk_report(report: &ApkReport) {
     }
 }
 
+fn print_runtime_info() -> Result<(), Box<dyn Error>> {
+    let backend = WaydroidBackend::default();
+    let info = backend.android_runtime_info()?;
+
+    println!("runtime provider: Waydroid Android guest");
+    println!(
+        "Android release: {}",
+        info.android_release.as_deref().unwrap_or("unknown")
+    );
+    println!(
+        "Android API level: {}",
+        info.api_level
+            .map(|level| level.to_string())
+            .unwrap_or_else(|| "unknown".to_owned())
+    );
+    println!(
+        "ART runtime family: {}",
+        match info.art_expected() {
+            Some(true) => "expected (Android API 21 or newer; inferred from API level)",
+            Some(false) => "not expected (Android API below 21)",
+            None => "unknown (API level unavailable)",
+        }
+    );
+    println!(
+        "build fingerprint: {}",
+        info.build_fingerprint.as_deref().unwrap_or("unknown")
+    );
+    println!(
+        "supported ABIs: {}",
+        if info.supported_abis.is_empty() {
+            "unknown".to_owned()
+        } else {
+            info.supported_abis.join(", ")
+        }
+    );
+    println!(
+        "zygote mode: {}",
+        info.zygote_mode.as_deref().unwrap_or("unknown")
+    );
+    println!(
+        "ART JIT property: {}",
+        info.jit_enabled
+            .map(|enabled| if enabled { "enabled" } else { "disabled" })
+            .unwrap_or("unknown")
+    );
+    println!(
+        "Android boot completed: {}",
+        info.boot_completed
+            .map(|completed| if completed { "yes" } else { "no" })
+            .unwrap_or("unknown")
+    );
+    println!("note: ART runs inside the Android guest; it is not embedded in droid-core.");
+    Ok(())
+}
+
 fn print_status(backend: &dyn RuntimeBackend) -> Result<(), Box<dyn Error>> {
     println!(
         "backend: {} ({})",
@@ -762,14 +823,19 @@ fn dump_method(
                         }
                     }
                 } else if opcode == 0x1b {
-                    if let (Some(low), Some(high)) =
-                        (code.insns.get(pc + 1), code.insns.get(pc + 2))
-                    {
-                        let string_idx = u32::from(*low) | (u32::from(*high) << 16);
-                        match dex.string(string_idx) {
-                            Ok(value) => println!("const-string/jumbo literal: {value:?}"),
-                            Err(error) => println!("const-string/jumbo index is invalid: {error}"),
+                    match (code.insns.get(pc + 1), code.insns.get(pc + 2)) {
+                        (Some(low), Some(high)) => {
+                            let string_idx = u32::from(*low) | (u32::from(*high) << 16);
+                            match dex.string(string_idx) {
+                                Ok(value) => println!("const-string/jumbo literal: {value:?}"),
+                                Err(error) => {
+                                    println!("const-string/jumbo index is invalid: {error}")
+                                }
+                            }
                         }
+                        _ => println!(
+                            "truncated const-string/jumbo instruction at selected code unit"
+                        ),
                     }
                 }
             }
@@ -995,6 +1061,15 @@ mod tests {
             ]))
             .is_err()
         );
+    }
+
+    #[test]
+    fn runtime_info_command_is_recognized() {
+        assert_eq!(
+            parse_command(args(&["runtime-info"])),
+            Ok(CliCommand::RuntimeInfo)
+        );
+        assert!(parse_command(args(&["runtime-info", "extra"])).is_err());
     }
 
     #[test]
