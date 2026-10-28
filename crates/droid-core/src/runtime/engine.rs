@@ -2042,9 +2042,13 @@ mod tests {
 
     #[test]
     fn branches_over_decodable_but_unsupported_conversion_and_float_instructions() {
-        // if-eqz v0, +6; int-to-float; mul-float; float-to-int; return v0
+        // if-eqz v0, +9; int-to-float; mul-float; const/high16;
+        // add-float/2addr; float-to-int; return v0.
         // The branch proves these known-width instructions can be skipped safely.
-        let method = code(2, 0, &[0x0038, 6, 0x0082, 0x00a8, 0x0100, 0x0087, 0x000f]);
+        let instructions = [
+            0x0038, 9, 0x0082, 0x00a8, 0x0100, 0x0115, 0x3f00, 0x10c6, 0x0087, 0x000f,
+        ];
+        let method = code(2, 0, &instructions);
         assert_eq!(
             run(&method, &[]).unwrap().return_value,
             EngineReturn::Int(0)
