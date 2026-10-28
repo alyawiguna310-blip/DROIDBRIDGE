@@ -343,6 +343,10 @@ fn parse_status_output(output: &str) -> Option<BackendStatus> {
 
     if lower.contains("session: running") && lower.contains("container: running") {
         Some(BackendStatus::Ready)
+    } else if lower.contains("session: running") && lower.contains("container: frozen") {
+        Some(BackendStatus::Unavailable {
+            reason: "Waydroid session is running but its container is frozen; run `sudo waydroid container unfreeze` and retry".to_owned(),
+        })
     } else if lower.contains("session: stopped") || lower.contains("container: stopped") {
         Some(BackendStatus::NotRunning)
     } else if lower.contains("not initialized")
@@ -533,6 +537,16 @@ mod tests {
         assert_eq!(
             parse_status_output("Session: STOPPED\nContainer: STOPPED\n"),
             Some(BackendStatus::NotRunning)
+        );
+    }
+
+    #[test]
+    fn status_parser_reports_a_frozen_container_explicitly() {
+        assert_eq!(
+            parse_status_output("Session: RUNNING\\nContainer: FROZEN\\n"),
+            Some(BackendStatus::Unavailable {
+                reason: "Waydroid session is running but its container is frozen; run `sudo waydroid container unfreeze` and retry".to_owned(),
+            })
         );
     }
 
