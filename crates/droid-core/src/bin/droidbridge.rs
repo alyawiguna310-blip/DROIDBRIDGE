@@ -724,6 +724,36 @@ fn dump_method(
                     } else {
                         println!("truncated invoke instruction at selected code unit");
                     }
+                } else if (0x52..=0x6d).contains(&opcode) {
+                    if let Some(field_index_word) = code.insns.get(pc + 1).copied() {
+                        let field_idx = u32::from(field_index_word);
+                        if (0x60..=0x6d).contains(&opcode) {
+                            println!("static field register: v{}", word >> 8);
+                        } else {
+                            let value_register = usize::from((word >> 8) & 0x0f);
+                            let object_register = usize::from(word >> 12);
+                            println!(
+                                "instance field registers: value/destination v{value_register}, object v{object_register}"
+                            );
+                        }
+
+                        match dex.fields().get(field_idx as usize) {
+                            Some(field) => {
+                                let owner = dex.type_descriptor(u32::from(field.class_idx))?;
+                                let field_type = dex.type_descriptor(u32::from(field.type_idx))?;
+                                let name = dex.string(field.name_idx)?;
+                                println!(
+                                    "field target: {owner}->{name}:{field_type} [field index {field_idx}]"
+                                );
+                            }
+                            None => println!(
+                                "field index {field_idx} is invalid (field table has {} entries)",
+                                dex.fields().len()
+                            ),
+                        }
+                    } else {
+                        println!("truncated field instruction at selected code unit");
+                    }
                 } else if opcode == 0x1a {
                     if let Some(string_idx) = code.insns.get(pc + 1).copied() {
                         match dex.string(u32::from(string_idx)) {
