@@ -255,6 +255,7 @@ fn print_usage() {
          Usage:\n\
            droidbridge inspect <apk-path>\n\
            droidbridge status\n\
+           droidbridge runtime-info\n\
            droidbridge engine-demo\n\
            droidbridge methods <apk-path> <dex-entry> [class-descriptor]\n\
            droidbridge probe-methods <apk-path> <dex-entry> [class-descriptor]\n\
@@ -1056,6 +1057,15 @@ mod tests {
             ]))
             .is_err()
         );
+    }
+
+    #[test]
+    fn runtime_info_command_is_recognized() {
+        assert_eq!(
+            parse_command(args(&["runtime-info"])),
+            Ok(CliCommand::RuntimeInfo)
+        );
+        assert!(parse_command(args(&["runtime-info", "extra"])).is_err());
     }
 
     #[test]
