@@ -1648,13 +1648,7 @@ fn decode_program(
             | 0x60..=0x6d
             | 0x90..=0x9a
             | 0xd0..=0xe2 => 2,
-            0x03
-            | 0x09
-            | 0x14
-            | 0x1b
-            | 0x2a
-            | 0x6e..=0x72
-            | 0x74..=0x78 => 3,
+            0x03 | 0x09 | 0x14 | 0x1b | 0x2a | 0x6e..=0x72 | 0x74..=0x78 => 3,
             _ => return Err(EngineError::UnsupportedOpcode { pc, opcode }),
         };
 
@@ -2348,7 +2342,7 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_opcodes_before_execution() {
-        let method = code(0, 0, &[0x0071, 0x000e]); // no resolver is provided
+        let method = code(0, 0, &[0x0071, 0x0000, 0x0000]); // complete invoke-static; no resolver is provided
         assert_eq!(
             run(&method, &[]),
             Err(EngineError::UnsupportedOpcode {
