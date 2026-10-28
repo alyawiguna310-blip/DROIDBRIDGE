@@ -1633,8 +1633,7 @@ fn decode_program(
             | 0x12
             | 0x27
             | 0x28
-            | 0x7b..=0x8f
-            | 0xb0..=0xcf => 1,
+            | 0x7b..=0x8f | 0xb0..=0xcf => 1,
             0x0a | 0x0c if allow_static_calls => 1,
             0x02
             | 0x08
@@ -1645,8 +1644,7 @@ fn decode_program(
             | 0x29
             | 0x32..=0x3d
             | 0x52..=0x6d
-            | 0x90..=0xaf
-            | 0xd0..=0xe2 => 2,
+            | 0x90..=0xaf | 0xd0..=0xe2 => 2,
             0x03 | 0x09 | 0x14 | 0x1b | 0x2a | 0x6e..=0x72 | 0x74..=0x78 => 3,
             _ => return Err(EngineError::UnsupportedOpcode { pc, opcode }),
         };
@@ -2046,11 +2044,7 @@ mod tests {
     fn branches_over_decodable_but_unsupported_conversion_and_float_instructions() {
         // if-eqz v0, +6; int-to-float; mul-float; float-to-int; return v0
         // The branch proves these known-width instructions can be skipped safely.
-        let method = code(
-            2,
-            0,
-            &[0x0038, 6, 0x0082, 0x00a8, 0x0100, 0x0087, 0x000f],
-        );
+        let method = code(2, 0, &[0x0038, 6, 0x0082, 0x00a8, 0x0100, 0x0087, 0x000f]);
         assert_eq!(
             run(&method, &[]).unwrap().return_value,
             EngineReturn::Int(0)
