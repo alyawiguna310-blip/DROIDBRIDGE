@@ -14,12 +14,12 @@ DROIDBRIDGE is being developed **Linux-first** because the current developer wor
 
 1. Harden the shared DEX parser and bounded engine on Linux: correct instruction decoding, preserve resource limits, add regression tests, and use real-APK probes to find concrete compatibility gaps.
 2. Validate engine changes with Linux CI and, where available, harmless real APKs. Optimize measured hot paths only after correctness tests are in place; do not treat a higher probe count as proof that an APK runs correctly.
-3. Validate the Linux runtime adapter separately against a live, initialized Waydroid environment. Engine execution and an external Android runtime are separate paths and should not be conflated.
+3. Integrate the real Android runtime through the external Waydroid guest, expose selected guest properties for diagnostics, and validate installation/launch against a live, initialized Waydroid environment. Engine execution and an external Android runtime are separate paths and should not be conflated.
 4. Keep portable core APIs independent of Linux process launchers and host UI. After the Linux interfaces and tests stabilize, add Windows-target build checks and implement a Windows-specific runtime adapter/front end. Waydroid commands are not a Windows backend.
 
 ## Non-goals for the first milestones
 
-The project does not yet implement ART, general object semantics, Android system services, graphics, or full application lifecycle behavior. The bounded DEX engine currently supports only a small scalar instruction subset and constrained static calls; it cannot run a complete APK or Android application end to end.
+The project does not embed ART in its Rust core. On Linux, the intended real-app path uses Waydroid's LineageOS-based Android guest, which supplies ART and Android framework services. The bounded DEX engine remains a separate analysis/interpreter component; it supports only a small scalar instruction subset and constrained static calls and cannot run a complete APK or Android application end to end.
 
 ## Layers
 
@@ -27,8 +27,8 @@ The project does not yet implement ART, general object semantics, Android system
 2. **DroidCore** — portable configuration, profile schema, runtime-backend contracts, and app metadata models.
 3. **APK inspector** — bounded ZIP/APK inspection, manifest parsing, ABI and SDK detection.
 4. **Project-owned execution engine** — a bounded scalar DEX interpreter with constrained static calls across loaded DEX files. It is not ART and cannot load a whole APK.
-5. **External runtime adapter** — a defined core contract plus an optional Linux Waydroid CLI adapter for probing, installing/launching, polling, and stopping apps. Live Waydroid integration has not yet been validated.
-6. **Android application environment** — ART-equivalent class loading, general framework APIs, system services, graphics, and app lifecycle remain missing.
+5. **External Android runtime adapter** — a defined core contract plus a Linux Waydroid CLI adapter for probing, installing/launching, polling, stopping apps, and querying selected Android guest properties. Live Waydroid integration has not yet been validated.
+6. **Android application environment** — supplied by the Waydroid guest on the live execution path. ART, class loading, framework APIs, system services, graphics and lifecycle are not reproduced by the DROIDBRIDGE scalar interpreter; availability and compatibility depend on the configured Android guest.
 7. **Native-code compatibility** — execute compatible host-native libraries directly where possible; use ARM translation only when necessary and supported.
 8. **Google services** — optional, legally provisioned integration evaluated separately for each runtime.
 
@@ -67,7 +67,7 @@ The `runtime` module specifies the boundary between the portable core and an ind
 - `LaunchRequest` requires a nonempty APK path and package name plus a valid stable profile id. Construction does not inspect the APK, check file existence, install it, or guarantee compatibility.
 - `RuntimeSession` provides state polling and a stop request. Typed `RuntimeError` variants allow frontends to handle failures without parsing human-readable messages.
 
-The Waydroid adapter requires Waydroid to be installed and initialized and its user session/container to be running before launch. It does not automatically install or initialize Waydroid, start the session, inspect the APK manifest, verify that the supplied package name matches the APK, or apply the selected device-profile identity. It uses Waydroid's documented CLI for status, APK install, app launch, process polling, and force-stop. The adapter contract does not itself provide Android framework services or execute DEX, and command success does not guarantee an arbitrary app will run. A live test with a harmless test APK is still required.
+The Waydroid adapter requires Waydroid to be installed and initialized and its user session/container to be running before launch. It does not automatically install or initialize Waydroid, start the session, or apply the selected device-profile identity. It uses Waydroid's CLI for status, APK install, app launch, process polling, force-stop and allowlisted guest-property queries. Waydroid's LineageOS-based Android guest provides ART and the Android framework; DROIDBRIDGE does not copy or embed ART source in the Rust crate. The new `runtime-info` command reports Android release, API level, build fingerprint, supported ABI list, Zygote mode, JIT property and boot completion. It infers that ART is expected from API level 21 or newer rather than independently verifying ART binaries. The adapter does not guarantee an arbitrary APK will run. A live test with a harmless test APK is still required.
 
 ## Verified APK launch preflight
 
@@ -87,6 +87,7 @@ The `droidbridge` binary exposes these paths into the shared core:
 
 - `inspect <apk-path>` runs the bounded APK inspector and prints manifest, DEX, and native-library summaries without executing the APK.
 - `status` probes the existing Waydroid installation/session and prints known adapter capabilities.
+- `runtime-info` queries selected Android guest properties and reports the ART runtime family expected from the reported API level.
 - `engine-demo` runs a synthetic integer method in the project-owned `IntegerDexEngine` without Waydroid, demonstrating the internal engine independently of an Android installation.
 - `methods` lists static `int(int, ...)` candidates from one DEX entry.
 - `probe-methods` tries at most 20 candidates with zero-valued integer-like arguments and reports methods that execute or are refused. This is a coverage probe, not a correctness test: many methods require meaningful nonzero inputs.
